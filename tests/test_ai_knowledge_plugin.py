@@ -219,3 +219,115 @@ def test_offline_fusion_and_customizable_bundle_exports_and_reload(tmp_path: Pat
     reloaded = ak.load_workspace_from_json(by_ext[".json"].read_text(encoding="utf-8"))
     assert reloaded.title == ws.title
     assert len(reloaded.questions) == 3 and len(reloaded.notes) == 1
+
+
+def test_drag_drop_smart_classifier_and_clipboard_screenshot(tmp_path: Path):
+    from cctr_export.core.formats import export_questions_to_xlsx
+
+    qs = _sample_questions()
+    xlsx_path = export_questions_to_xlsx(qs, tmp_path / "信号题库.xlsx", title="信号")
+    note_md = tmp_path / "第2章课堂笔记总结.md"
+    note_md.write_text("# 傅里叶变换重点\n时域卷积等于频域乘积", encoding="utf-8")
+    img_path = tmp_path / "board.png"
+    Image.new("RGB", (200, 120), color=(250, 250, 248)).save(img_path, format="PNG")
+
+    res = ak.classify_and_import_dropped_paths([str(xlsx_path), str(note_md), str(img_path)], zone_hint="auto")
+    assert len(res["questions"]) == 3
+    assert len(res["notes"]) == 2
+    assert not res["errors"]
+
+    # Ctrl+V 剪贴板图片粘贴
+    import base64
+    buf = io.BytesIO()
+    Image.new("RGB", (100, 60), color=(240, 240, 240)).save(buf, format="PNG")
+    pasted = ak.import_note_from_data_uri("随堂截图", "data:image/png;base64," + base64.b64encode(buf.getvalue()).decode("ascii"))
+    assert pasted.source_type == "image" and pasted.image_data_uri.startswith("data:image/jpeg;base64,")
+
+
+def test_workbuddy_qwen_handoff_parser_and_cli_agent(monkeypatch, tmp_path: Path):
+    hdir = tmp_path / "ai_handoff"
+    hdir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ak, "get_handoff_dir", lambda: hdir)
+
+    qs = _sample_questions()
+    ws = ak.KnowledgeWorkspace(title="千问测试", questions=qs, notes=[])
+    pack = ak.build_workbench_handoff_pack(ws, custom_prompt="重点列出公式")
+    assert Path(pack["bundle_md"]).is_file()
+    assert "[Q1]" in pack["prompt_text"] and "[Q3]" in pack["prompt_text"]
+
+    # 1. JSON 区间语法 ("Q1-Q2") + 漏题 Q3 自动语义兜底
+    reply_json = """```json
+    {"topics": [
+      {"name": "傅里叶与采样", "importance": "核心高频", "summary_md": "先讲傅里叶再接采样", "formulas": ["fs >= 2B"], "questions": ["Q1-Q2"]},
+      {"name": "信道容量与香农公式", "importance": "重要掌握", "summary_md": "信道带宽和信噪比权衡", "formulas": ["C=Blog2(1+S/N)"], "questions": []}
+    ]}
+    ```"""
+    parsed = ak.parse_external_assistant_reply(reply_json, qs, [])
+    all_qids = [qid for tp in parsed.topics for qid in tp.question_ids]
+    assert set(all_qids) == {"k:1", "k:2", "k:3"}
+
+    # 2. Markdown 标题回退解析
+    reply_md = "## 1. 傅里叶变换专题\n掌握频谱转换，练习第1题、Q2。\n## 2. 香农公式\n掌握信道容量计算，对应 Q3。"
+    parsed_md = ak.parse_external_assistant_reply(reply_md, qs, [])
+    assert len(parsed_md.topics) == 2
+    assert set(qid for tp in parsed_md.topics for qid in tp.question_ids) == {"k:1", "k:2", "k:3"}
+
+    # 3. 本地 CLI Agent (provider="cli") 调用链验证
+    monkeypatch.setattr(ak, "_resolve_cli_command", lambda _p="": "codebuddy")
+
+    class _Done:
+        returncode = 0
+        stdout = "连接正常"
+        stderr = ""
+
+    captured_cmds: list[list[str]] = []
+
+    def _fake_run(argv, **kwargs):
+        captured_cmds.append(list(argv))
+        return _Done()
+
+    monkeypatch.setattr(ak.subprocess, "run", _fake_run)
+    cli_prof = ak.ModelProfile(preset="workbuddy_cli", provider="cli", base_url="codebuddy", model="auto")
+    assert ak.MultimodalModelClient(cli_prof).chat("请只回复：连接正常") == "连接正常"
+    assert captured_cmds and captured_cmds[0][:2] == ["codebuddy", "-p"]
+
+
+def test_rich_docx_html_xlsx_and_layout_modes(tmp_path: Path):
+    qs = _sample_questions()
+    note = ak.NoteItem(id="n1", title="课堂公式笔记", source_type="txt", raw_text="采样定理与香农公式重点")
+    ws = ak.offline_classify_and_fuse(qs, [note], title="信号期末冲刺")
+
+    # 测试 3 种知识点+接题编排模式 HTML
+    for mode in ("inline", "compact_answers_end", "split"):
+        html_out = ak.build_fused_topic_html(ws, variant="withAnswersRed", layout_mode=mode)
+        assert "傅里叶" in html_out and "采样" in html_out
+        if mode == "compact_answers_end":
+            assert "本考点参考答案与解析核对" in html_out
+        elif mode == "split":
+            assert "第一部分" in html_out and "第二部分" in html_out
+
+    out_dir = tmp_path / "rich_out"
+    paths = ak.export_knowledge_bundle(
+        ws,
+        outputs=["fused_pdf", "docx", "html", "xlsx", "md", "anki", "zip", "json"],
+        layout_mode="inline",
+        output_dir=out_dir,
+    )
+    assert len(paths) == 8
+    by_ext = {Path(p).suffix.lower(): Path(p) for p in paths}
+
+    # 验证 .docx OOXML 内容完整包含考点精要与题目
+    with zipfile.ZipFile(str(by_ext[".docx"]), "r") as zf:
+        doc_xml = zf.read("word/document.xml").decode("utf-8")
+        assert "课堂笔记与考点精要" in doc_xml and "傅里叶变换" in doc_xml
+
+    # 验证双 Sheet .xlsx（考点精要总览 + 分考点配套题库）
+    with zipfile.ZipFile(str(by_ext[".xlsx"]), "r") as zf:
+        assert "xl/worksheets/sheet2.xml" in zf.namelist()
+        wb_xml = zf.read("xl/workbook.xml").decode("utf-8")
+        assert "考点精要总览" in wb_xml and "分考点配套题库" in wb_xml
+
+    # 验证单文件离线交互刷题 HTML
+    quiz_html = by_ext[".html"].read_text(encoding="utf-8")
+    assert "自测刷题模式" in quiz_html and "背题精讲模式" in quiz_html
+

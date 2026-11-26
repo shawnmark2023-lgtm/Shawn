@@ -13,7 +13,7 @@ namespace CCTRCloudSetup
     internal static class SetupProgram
     {
         private const string AppDisplayName = "融智云考 · 印务台";
-        private const string AppVersion = "5.0.0";
+        private const string AppVersion = "5.1.0";
         private const string UninstallRegPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CCTRCloudExport";
 
         [STAThread]
@@ -71,6 +71,76 @@ namespace CCTRCloudSetup
                 Application.Run(form);
             }
             return 0;
+        }
+
+        internal static void ExtractTarXzPayload(string resourceName, string installDir, Action<int> onProgress, Action<string> log)
+        {
+            Assembly asm = Assembly.GetExecutingAssembly();
+            string tmpArchive = Path.Combine(installDir, "_payload.tar.xz");
+            string internalDir = Path.Combine(installDir, "_internal");
+            if (Directory.Exists(internalDir))
+            {
+                try { Directory.Delete(internalDir, true); } catch { }
+            }
+
+            using (Stream raw = asm.GetManifestResourceStream(resourceName))
+            {
+                if (raw == null)
+                {
+                    throw new InvalidOperationException("安装包内缺少资源：" + resourceName);
+                }
+                Directory.CreateDirectory(installDir);
+                using (var fs = new FileStream(tmpArchive, FileMode.Create, FileAccess.Write, FileShare.None, 1024 * 1024))
+                {
+                    byte[] buffer = new byte[1024 * 1024];
+                    long total = raw.CanSeek ? Math.Max(1L, raw.Length) : 1L;
+                    long copied = 0;
+                    int read;
+                    while ((read = raw.Read(buffer, 0, buffer.Length)) > 0)
+                    {
+                        fs.Write(buffer, 0, read);
+                        copied += read;
+                        int pct = 5 + (int)Math.Min(38, (copied * 38L) / total);
+                        onProgress(pct);
+                    }
+                }
+            }
+
+            log("正在高速解压独立运行环境 (_internal / Python / PySide6 / VC++ / OCR)...");
+            onProgress(48);
+            string tarExe = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "tar.exe");
+            if (!File.Exists(tarExe))
+            {
+                tarExe = "tar.exe";
+            }
+            try
+            {
+                var psi = new ProcessStartInfo(tarExe, "-xf \"" + tmpArchive + "\" -C \"" + installDir + "\"")
+                {
+                    CreateNoWindow = true,
+                    UseShellExecute = false,
+                    RedirectStandardError = true,
+                    WindowStyle = ProcessWindowStyle.Hidden,
+                    WorkingDirectory = installDir,
+                };
+                using (var proc = Process.Start(psi))
+                {
+                    if (proc == null || !proc.WaitForExit(180000))
+                    {
+                        throw new TimeoutException("解压运行环境超时");
+                    }
+                    if (proc.ExitCode != 0)
+                    {
+                        string err = proc.StandardError.ReadToEnd();
+                        throw new InvalidOperationException("tar.exe 解压失败 (" + proc.ExitCode + "): " + err);
+                    }
+                }
+                onProgress(78);
+            }
+            finally
+            {
+                try { if (File.Exists(tmpArchive)) File.Delete(tmpArchive); } catch { }
+            }
         }
 
         internal static void ExtractGzipResource(string resourceName, string targetPath, Action<int> progressPct)
@@ -249,13 +319,19 @@ namespace CCTRCloudSetup
         )
         {
             log("正在准备安装目录：" + installDir);
+            string normPrefix = installDir.TrimEnd('\\', '/') + "\\";
             foreach (var proc in Process.GetProcessesByName("CCTRCloudExportDesktop"))
             {
                 try
                 {
+                    string modPath = proc.MainModule != null ? proc.MainModule.FileName : "";
+                    if (string.IsNullOrEmpty(modPath) || !modPath.StartsWith(normPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
                     proc.Kill();
                     proc.WaitForExit(3000);
-                    log("已关闭旧版本正在运行的进程");
+                    log("已关闭安装目录下正在运行的旧版本进程");
                 }
                 catch
                 {
@@ -267,8 +343,8 @@ namespace CCTRCloudSetup
             string uninstallExe = Path.Combine(installDir, "Uninstall.exe");
 
             onProgress(5);
-            log("正在释放主程序与内置全套运行环境 (Python / PySide6 / VC++ / OCR / SOCKS5)...");
-            ExtractGzipResource("app.gz", desktopExe, p => onProgress(5 + (int)(p * 0.72)));
+            log("正在释放主程序与 LZMA 精简独立运行环境 (Python / PySide6 / VC++ / OCR / SOCKS5)...");
+            ExtractTarXzPayload("app.tar.xz", installDir, onProgress, log);
 
             onProgress(80);
             log("正在写入独立卸载程序 Uninstall.exe...");
@@ -298,7 +374,19 @@ namespace CCTRCloudSetup
             }
 
             onProgress(90);
-            long sizeKb = new FileInfo(desktopExe).Length / 1024L + 128L;
+            long totalBytes = 0;
+            try
+            {
+                foreach (string f in Directory.EnumerateFiles(installDir, "*", SearchOption.AllDirectories))
+                {
+                    totalBytes += new FileInfo(f).Length;
+                }
+            }
+            catch
+            {
+                totalBytes = File.Exists(desktopExe) ? new FileInfo(desktopExe).Length : 0;
+            }
+            long sizeKb = totalBytes / 1024L + 128L;
             using (RegistryKey key = Registry.CurrentUser.CreateSubKey(UninstallRegPath))
             {
                 key.SetValue("DisplayName", AppDisplayName);

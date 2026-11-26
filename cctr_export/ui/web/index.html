@@ -678,33 +678,66 @@
   }
   .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
 
-  /* ── v5 AI Knowledge Fusion Plugin View ─────────────────── */
-  .ai-shell { display: grid; grid-template-columns: 360px 1fr; gap: 18px; max-width: 1360px; width: 100%; margin: 0 auto; min-height: 0; }
-  .ai-col { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
-  .ai-card { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 16px; box-shadow: var(--shadow-sheet); }
-  .ai-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
-  .ai-card-head h3 { font-size: 13.5px; font-weight: 700; }
-  .ai-note-item { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); background: var(--sheet-soft); border-radius: 6px; padding: 9px 10px; margin-bottom: 8px; }
-  .ai-note-thumb { width: 48px; height: 48px; border-radius: 4px; object-fit: cover; border: 1px solid var(--line); flex-shrink: 0; background: var(--well); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--ink-2); }
-  .ai-tree-grid { display: grid; grid-template-columns: 270px 1fr; gap: 14px; min-height: 340px; }
-  .ai-topic-list { display: flex; flex-direction: column; gap: 7px; max-height: 460px; overflow-y: auto; padding-right: 4px; }
+  /* ── v5.1 Simplified 3-Step AI Plugin & Drag-Drop ───────── */
+  .ai-flow { display: flex; flex-direction: column; gap: 16px; max-width: 1180px; width: 100%; margin: 0 auto; }
+  .ai-card { background: var(--paper); border: 1px solid var(--line); border-radius: 8px; padding: 16px 18px; box-shadow: var(--shadow-sheet); }
+  .ai-card-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-bottom: 12px; padding-bottom: 8px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  .ai-card-head h3 { font-size: 14px; font-weight: 700; display: flex; align-items: center; gap: 8px; }
+  .step-pill { display: inline-flex; align-items: center; justify-content: center; width: 20px; height: 20px; border-radius: 50%; background: var(--ink); color: var(--paper); font-size: 11px; font-weight: 700; }
+  .dropzone-hero {
+    border: 1.5px dashed var(--line-strong); border-radius: 8px; background: var(--sheet-soft);
+    padding: 18px 16px; text-align: center; cursor: pointer; transition: all 0.16s;
+  }
+  .dropzone-hero:hover, .dropzone-hero.drag-over { border-color: var(--jade); background: var(--jade-soft); }
+  .dropzone-hero strong { display: block; font-size: 13.5px; color: var(--ink); margin-bottom: 4px; }
+  .dropzone-hero span { font-size: 12px; color: var(--ink-2); }
+  .ai-notes-strip { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 8px; margin-top: 10px; }
+  .ai-note-item { display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--line); background: var(--sheet-soft); border-radius: 6px; padding: 8px 10px; }
+  .ai-note-thumb { width: 44px; height: 44px; border-radius: 4px; object-fit: cover; border: 1px solid var(--line); flex-shrink: 0; background: var(--well); display: flex; align-items: center; justify-content: center; font-size: 11px; font-weight: 700; color: var(--ink-2); }
+  .ai-mode-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-bottom: 12px; }
+  .ai-mode-card {
+    border: 1px solid var(--line); background: var(--sheet-soft); border-radius: 7px; padding: 10px 12px;
+    text-align: left; cursor: pointer; transition: all 0.14s;
+  }
+  .ai-mode-card:hover { border-color: var(--line-strong); background: var(--well); }
+  .ai-mode-card.active { border-color: var(--ink); background: var(--paper); box-shadow: 0 2px 10px rgba(0,0,0,0.06); }
+  .ai-mode-card strong { display: block; font-size: 12.5px; margin-bottom: 3px; color: var(--ink); }
+  .ai-mode-card span { display: block; font-size: 11px; color: var(--ink-2); line-height: 1.4; }
+  .ai-mode-pane { border: 1px solid var(--line); background: var(--sheet-soft); border-radius: 7px; padding: 12px 14px; }
+  .ai-tree-grid { display: grid; grid-template-columns: 270px 1fr; gap: 14px; min-height: 360px; }
+  .ai-topic-list { display: flex; flex-direction: column; gap: 7px; max-height: 520px; overflow-y: auto; padding-right: 4px; }
   .ai-topic-node { border: 1px solid var(--line); background: var(--sheet-soft); border-radius: 6px; padding: 10px 11px; cursor: pointer; text-align: left; transition: all 0.14s; }
   .ai-topic-node:hover { border-color: var(--line-strong); background: var(--well); }
   .ai-topic-node.active { border-color: var(--ink); background: var(--paper); box-shadow: 0 2px 8px rgba(0,0,0,0.06); }
   .imp-badge { display: inline-block; font-size: 10.5px; font-weight: 600; padding: 1px 6px; border-radius: 4px; background: var(--well); color: var(--ink-2); }
   .imp-badge.核心高频 { background: var(--vermilion-soft); color: var(--vermilion); border: 1px solid var(--vermilion-line); }
   .imp-badge.重要掌握 { background: var(--jade-soft); color: var(--jade); border: 1px solid var(--jade-line); }
-  .ai-textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; line-height: 1.55; background: var(--sheet-soft); color: var(--ink); resize: vertical; font-family: inherit; }
+  .handout-box { background: var(--sheet-soft); border-left: 3px solid var(--jade); border-radius: 6px; padding: 11px 13px; margin: 8px 0 12px; font-size: 12.5px; line-height: 1.68; white-space: pre-wrap; color: var(--ink); }
+  .ai-textarea { width: 100%; border: 1px solid var(--line-strong); border-radius: 6px; padding: 8px 10px; font-size: 12.5px; line-height: 1.55; background: var(--paper); color: var(--ink); resize: vertical; font-family: inherit; }
   .ai-q-row { border: 1px solid var(--line); border-radius: 6px; padding: 9px 11px; background: var(--sheet-soft); margin-bottom: 8px; display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; }
   .check-pill { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--sheet-soft); font-size: 12px; cursor: pointer; user-select: none; }
   .check-pill input { accent-color: var(--ink); }
-  .ollama-pill { font-size: 11px; padding: 3px 8px; border: 1px solid var(--jade-line); background: var(--jade-soft); color: var(--jade); border-radius: 4px; cursor: pointer; }
+  .ollama-pill { font-size: 11px; padding: 4px 9px; border: 1px solid var(--jade-line); background: var(--jade-soft); color: var(--jade); border-radius: 5px; cursor: pointer; }
+  .drag-curtain {
+    display: none; position: fixed; inset: 0; z-index: 200;
+    background: rgba(20, 20, 19, 0.45); backdrop-filter: blur(2px);
+    align-items: center; justify-content: center; pointer-events: none;
+  }
+  .drag-curtain.show { display: flex; }
+  .drag-curtain-box {
+    background: var(--paper); color: var(--ink); border: 2px dashed var(--jade);
+    border-radius: 12px; padding: 28px 40px; text-align: center; box-shadow: var(--shadow-sheet);
+    font-size: 15px; font-weight: 700;
+  }
+  details.ai-adv { margin-top: 10px; border-top: 1px dashed var(--line); padding-top: 8px; }
+  details.ai-adv summary { cursor: pointer; font-size: 12px; color: var(--ink-2); user-select: none; }
 
   /* ── Responsive Tablet / Narrow Window (< 960px / <= 780px) ─ */
   @media (max-width: 960px) {
     .auth-grid { grid-template-columns: 1fr; max-width: 480px; gap: 18px; }
     .auth-sheet { order: -1; }
-    .studio-grid, .ai-shell, .ai-tree-grid { grid-template-columns: 1fr; }
+    .studio-grid, .ai-tree-grid { grid-template-columns: 1fr; }
+    .ai-mode-grid { grid-template-columns: 1fr 1fr; }
     .tool-dir-text { max-width: 84px; }
   }
 
@@ -940,13 +973,13 @@
                 </button>
               </div>
 
-              <div id="srcPaneLocal" style="display:none;">
-                <div class="src-card">
-                  <strong>主流刷题软件 / 通用格式双向互转</strong>
-                  支持直接导入 <b>考试宝 / 磨题帮 Excel（.xlsx）</b>、<b>Word（.docx）</b>、<b>TXT / Markdown</b>、<b>JSON</b>（含学习通/雨课堂导出 JSON）以及 <b>CSV / Anki（.tsv）</b>，统一重排为 10.5pt A4 PDF 或互相转换导出。
+              <div id="srcPaneLocal" data-drop-zone="workspace" style="display:none;">
+                <div class="dropzone-hero" style="margin-bottom:12px;" onclick="importLocalFiles()">
+                  <strong>拖拽题库文件到这里，或点击浏览导入（可多选）</strong>
+                  <span>支持 <b>Excel (.xlsx)</b>、<b>Word (.docx)</b>、<b>TXT / Markdown</b>、<b>JSON</b>、<b>CSV / Anki (.tsv)</b></span>
                 </div>
                 <button class="btn btn-carbon" style="width:100%;height:40px;font-size:13px;" onclick="importLocalFiles()">
-                  选择本地题库文件并载入（可多选） →
+                  选择本地题库文件并载入 →
                 </button>
               </div>
             </div>
@@ -1148,150 +1181,210 @@
       </div>
     </section>
 
-    <!-- View 4: v5 AI Multimodal Knowledge Fusion Plugin -->
-    <section class="view" id="view-plugins">
+    <!-- View 4: v5.1 Simplified 3-Step AI Knowledge Fusion Plugin -->
+    <section class="view" id="view-plugins" data-drop-zone="auto">
       <div class="scroll-body">
-        <div class="ai-shell">
-          <!-- Left Sidebar: Model Config + Question Source + Multimodal Notes -->
-          <div class="ai-col">
-            <div class="ai-card">
-              <div class="ai-card-head">
-                <h3>多模态模型插件配置</h3>
-                <span class="mono" style="font-size:10.5px;color:var(--jade);" id="aiConnStatus">LOCAL / OPENAI</span>
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label for="aiPresetSel">模型接入方式预设</label>
-                <select class="select" id="aiPresetSel" onchange="onAiPresetChange()"></select>
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label for="aiBaseUrl">接口地址 (Base URL)</label>
-                <input class="input" id="aiBaseUrl" onchange="saveAiConfigDraft()" placeholder="http://127.0.0.1:11434 或 https://dashscope.aliyuncs.com/compatible-mode/v1">
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label for="aiApiKey">API Key（本机 Ollama 离线部署可留空）</label>
-                <input class="input" id="aiApiKey" type="password" onchange="saveAiConfigDraft()" placeholder="sk-...（仅存于本地设置文件）">
-              </div>
-              <div class="field" style="margin-bottom:10px;">
-                <label for="aiModelName">
-                  <span>视觉 / 推理模型名称</span>
-                  <button type="button" class="desk-link" onclick="probeOllamaModels()" style="font-size:11px;">探测本机 Ollama 模型</button>
-                </label>
-                <input class="input" id="aiModelName" onchange="saveAiConfigDraft()" placeholder="如 qwen2.5vl:7b / qwen-vl-max-latest / gpt-4o-mini">
-                <div id="ollamaDetectedList" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:6px;"></div>
-              </div>
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px;">
-                <div>
-                  <label class="sec-label" for="aiBatchSize" style="margin-top:0;">单批题数</label>
-                  <input class="input" id="aiBatchSize" type="number" min="5" max="60" value="24" onchange="saveAiConfigDraft()" style="height:32px;">
-                </div>
-                <div style="display:flex;align-items:flex-end;gap:6px;">
-                  <button type="button" class="btn btn-outline" style="width:100%;height:32px;font-size:12px;" onclick="testAiConnection()">测试连通</button>
-                </div>
-              </div>
-              <div class="field" style="margin-bottom:0;">
-                <label for="aiCustomPrompt">附加梳理偏好（可选）</label>
-                <input class="input" id="aiCustomPrompt" onchange="saveAiConfigDraft()" placeholder="如：重点提炼计算公式与易错概念辨析" style="height:32px;">
+        <div class="ai-flow">
+          <!-- Step 1: Drag & Drop Unified Importer -->
+          <div class="ai-card" data-drop-zone="auto">
+            <div class="ai-card-head">
+              <h3><span class="step-pill">1</span> 拖入题库与课堂资料（自动识别分流）</h3>
+              <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+                <span class="imp-badge" id="aiQCountBadge">0 题</span>
+                <span class="imp-badge" id="aiNoteCountBadge">0 份资料</span>
               </div>
             </div>
 
-            <div class="ai-card">
-              <div class="ai-card-head">
-                <h3>1. 题库数据源</h3>
-                <span class="mono" style="font-size:11px;color:var(--ink-2);" id="aiQCountBadge">0 题</span>
-              </div>
-              <div style="font-size:12px;color:var(--ink-2);margin-bottom:10px;" id="aiQSourceInfo">
-                尚未加载题库：可一键载入刚导出的任务，或导入 .json/.xlsx/.docx/.md 文件。
-              </div>
-              <div style="display:flex;flex-direction:column;gap:7px;">
-                <div style="display:flex;gap:6px;">
-                  <select class="select" id="aiTaskPickSel" style="flex:1;height:34px;font-size:12px;"><option value="">从已完成归档任务导入…</option></select>
-                  <button type="button" class="btn btn-outline" style="height:34px;padding:0 10px;font-size:12px;" onclick="loadSelectedSnapshotTask()">载入</button>
-                </div>
-                <div style="display:flex;gap:6px;">
-                  <button type="button" class="btn btn-outline" style="flex:1;height:34px;font-size:12px;" onclick="syncPracticesToAi()">同步工作台所选</button>
-                  <button type="button" class="btn btn-carbon" style="flex:1;height:34px;font-size:12px;" onclick="bridge && bridge.importAiQuestionFiles()">导入题库/图谱</button>
-                </div>
+            <div class="dropzone-hero" id="aiDropZone" data-drop-zone="auto" onclick="bridge && bridge.importAiNoteFiles()">
+              <strong>📥 把题库 (.xlsx/.docx/.json) 或课堂笔记、PPT、PDF、板书照片直接拖入此处</strong>
+              <span>支持一次拖入多个文件或整个文件夹，软件会自动区分「题库」「笔记/板书」与「知识图谱.json」 · 也可直接按 <b>Ctrl+V</b> 粘贴截图</span>
+            </div>
+
+            <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-top:10px;">
+              <button type="button" class="btn btn-carbon" style="height:34px;font-size:12px;" onclick="loadLatestSnapshotOrPick()">一键载入最近导出题库</button>
+              <select class="select" id="aiTaskPickSel" style="width:auto;min-width:190px;max-width:280px;height:34px;font-size:12px;" onchange="if(this.value) sendTaskToAiPlugin(Number(this.value))"><option value="">切换历史导出任务…</option></select>
+              <button type="button" class="btn btn-outline" style="height:34px;font-size:12px;" onclick="syncPracticesToAi()">同步工作台所选</button>
+              <button type="button" class="btn btn-outline" style="height:34px;font-size:12px;" onclick="bridge && bridge.importAiQuestionFiles()">选文件导入题库/图谱</button>
+              <button type="button" class="btn btn-outline" style="height:34px;font-size:12px;" onclick="openManualNoteBox()">+ 粘贴文字笔记</button>
+            </div>
+
+            <div id="aiQSourceInfo" style="font-size:12px;color:var(--ink-2);margin-top:9px;padding:7px 10px;border-radius:6px;background:var(--sheet-soft);border:1px solid var(--line);">
+              尚未加载题库：可直接拖入题库文件，或点击上方「一键载入最近导出题库」。
+            </div>
+
+            <div id="manualNoteWrap" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--sheet-soft);">
+              <input class="input" id="manualNoteTitle" placeholder="笔记标题（如：第3章板书笔记）" style="height:32px;margin-bottom:6px;font-size:12px;">
+              <textarea class="ai-textarea" id="manualNoteBody" rows="3" placeholder="粘贴课堂笔记、老师划的重点或公式总结…"></textarea>
+              <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;">
+                <button type="button" class="btn btn-text" style="height:28px;font-size:11.5px;" onclick="qs('manualNoteWrap').style.display='none'">取消</button>
+                <button type="button" class="btn btn-carbon" style="height:28px;font-size:11.5px;" onclick="submitManualNote()">保存笔记</button>
               </div>
             </div>
 
-            <div class="ai-card">
-              <div class="ai-card-head">
-                <h3>2. 课堂笔记与板书拍照</h3>
-                <span class="mono" style="font-size:11px;color:var(--ink-2);" id="aiNoteCountBadge">0 份</span>
-              </div>
-              <div style="display:flex;gap:6px;margin-bottom:10px;">
-                <button type="button" class="btn btn-carbon" style="flex:1;height:34px;font-size:12px;" onclick="bridge && bridge.importAiNoteFiles()">+ 导入照片/PDF/PPT/Word</button>
-                <button type="button" class="btn btn-outline" style="height:34px;font-size:12px;" onclick="openManualNoteBox()">+ 粘贴笔记</button>
-              </div>
-              <div id="manualNoteWrap" style="display:none;margin-bottom:10px;padding:8px;border:1px solid var(--line);border-radius:6px;background:var(--sheet-soft);">
-                <input class="input" id="manualNoteTitle" placeholder="笔记标题（如：第3章板书笔记）" style="height:30px;margin-bottom:6px;font-size:12px;">
-                <textarea class="ai-textarea" id="manualNoteBody" rows="3" placeholder="粘贴课堂笔记、老师划的重点或公式总结…"></textarea>
-                <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;">
-                  <button type="button" class="btn btn-text" style="height:28px;font-size:11.5px;" onclick="qs('manualNoteWrap').style.display='none'">取消</button>
-                  <button type="button" class="btn btn-carbon" style="height:28px;font-size:11.5px;" onclick="submitManualNote()">保存笔记</button>
-                </div>
-              </div>
-              <div id="aiNotesList" style="max-height:260px;overflow-y:auto;"></div>
-            </div>
+            <div id="aiNotesList" class="ai-notes-strip"></div>
           </div>
 
-          <!-- Right Main Area: Classification Engine + Interactive Topic Tree + Custom Output Bundler -->
-          <div class="ai-col">
-            <div class="ai-card">
+          <!-- Step 2: 4-Mode AI / Non-API / Local / WorkBuddy & Qwen Router -->
+          <div class="ai-card">
+            <div class="ai-card-head">
+              <h3><span class="step-pill">2</span> 选择整理方式（免 API 也可一键接入千问 / WorkBuddy）</h3>
+              <span class="mono" style="font-size:11px;color:var(--jade);" id="aiConnStatus">READY</span>
+            </div>
+
+            <div class="ai-mode-grid">
+              <button type="button" class="ai-mode-card active" data-mode="web" onclick="switchAiMode('web')">
+                <strong>🤝 免 API 千问 / WorkBuddy</strong>
+                <span>直接打开已登录网页版或 WorkBuddy 桌面包，零 API Key</span>
+              </button>
+              <button type="button" class="ai-mode-card" data-mode="offline" onclick="switchAiMode('offline')">
+                <strong>⚡ 本地免联网秒速归类</strong>
+                <span>零等待按章节与笔记关键词聚合出题</span>
+              </button>
+              <button type="button" class="ai-mode-card" data-mode="cli" onclick="switchAiMode('cli')">
+                <strong>🖥️ 本机 CLI / Ollama 直连</strong>
+                <span>直呼本机 WorkBuddy/CodeBuddy CLI 或 Ollama 视觉</span>
+              </button>
+              <button type="button" class="ai-mode-card" data-mode="api" onclick="switchAiMode('api')">
+                <strong>🔑 云端千问 / 多模态 API</strong>
+                <span>填 API Key 全自动批量识图 + 考点精排</span>
+              </button>
+            </div>
+
+            <!-- Mode A: Zero-API Web & WorkBuddy Handoff -->
+            <div class="ai-mode-pane" id="aiModePaneWeb">
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
+                <button type="button" class="btn btn-carbon" style="height:36px;font-size:12.5px;" onclick="openAiWorkbench('qianwen')">打开通义千问一键整理 →</button>
+                <button type="button" class="btn btn-outline" style="height:36px;font-size:12.5px;" onclick="openAiWorkbench('yuanbao')">腾讯元宝 / WorkBuddy 助手</button>
+                <button type="button" class="btn btn-outline" style="height:36px;font-size:12.5px;" onclick="openAiWorkbench('deepseek')">DeepSeek 网页版</button>
+                <button type="button" class="btn btn-outline" style="height:36px;font-size:12.5px;" onclick="openAiWorkbench('kimi')">Kimi</button>
+                <button type="button" class="btn btn-outline" style="height:36px;font-size:12.5px;border-color:var(--jade-line);color:var(--jade);" onclick="prepareWorkBuddyPack()">📂 生成 WorkBuddy 桌面任务包</button>
+              </div>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+                <button type="button" class="btn btn-outline" style="height:32px;font-size:12px;" onclick="togglePasteReplyBox()">📋 从剪贴板 / 粘贴框回填 AI 回复</button>
+                <button type="button" class="btn btn-outline" style="height:32px;font-size:12px;" onclick="applyClipboardReply()">直接读取当前剪贴板生成考点树 ✨</button>
+                <span style="font-size:11.5px;color:var(--ink-2);">提示：点任意助手后会自动复制题库+笔记指令并打开内置窗口，AI 回复完毕点窗口右上角「提取回复」即可。</span>
+              </div>
+              <div id="aiReplyPasteWrap" style="display:none;margin-top:8px;">
+                <textarea class="ai-textarea" id="aiReplyPasteArea" rows="4" placeholder="如果已在外部通义千问 / WorkBuddy / 豆包窗口完成回复，请把回复内容完整粘贴到此处（支持 JSON 或 ## 考点 Markdown）…"></textarea>
+                <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;">
+                  <button type="button" class="btn btn-carbon" style="height:30px;font-size:12px;" onclick="applyPastedReplyBox()">立即解析并生成考点树 →</button>
+                </div>
+              </div>
+            </div>
+
+            <!-- Mode B: Instant Offline Keyword Clustering -->
+            <div class="ai-mode-pane" id="aiModePaneOffline" style="display:none;">
               <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-                <div style="min-width:200px;flex:1;">
-                  <input class="input" id="aiWorkspaceTitle" value="考点智能融合复习讲义" style="font-weight:700;height:36px;" onchange="syncTopicsToPython()">
-                </div>
-                <div style="display:flex;gap:8px;flex-wrap:wrap;">
-                  <button type="button" class="btn btn-outline" id="aiOfflineBtn" onclick="startAiFusion('offline')">离线快速按章节/笔记归类</button>
-                  <button type="button" class="btn btn-carbon" id="aiRunBtn" onclick="startAiFusion('ai')">多模态 AI 智能考点融合 →</button>
-                </div>
-              </div>
-              <div class="progress-track" id="aiProgTrack" style="margin-top:10px;"><div class="progress-fill" id="aiProgFill"></div></div>
-              <div class="mono" id="aiProgMsg" style="font-size:11.5px;color:var(--ink-2);margin-top:6px;">就绪：导入题库与课堂笔记/板书图片后，点击上方按钮即可生成交互式考点知识树。</div>
-            </div>
-
-            <div class="ai-card" style="flex:1;display:flex;flex-direction:column;">
-              <div class="ai-card-head">
-                <h3>可视化考点知识树（支持人工微调、增删与跨考点调题）</h3>
-                <div style="display:flex;gap:6px;">
-                  <button type="button" class="btn btn-outline" style="height:28px;padding:0 10px;font-size:11.5px;" onclick="addCustomTopic()">+ 新增考点</button>
-                  <button type="button" class="btn btn-outline" style="height:28px;padding:0 10px;font-size:11.5px;" onclick="mergeSelectedTopic()">合并当前考点…</button>
-                </div>
-              </div>
-              <div id="aiEmptyTree" class="empty-state" style="padding:36px 20px;">
-                尚未生成考点知识树：可先在左侧导入已导出题库与课堂笔记，点击「多模态 AI 智能考点融合」或「离线快速归类」。
-              </div>
-              <div class="ai-tree-grid" id="aiTreeGrid" style="display:none;">
-                <div class="ai-topic-list" id="aiTopicList"></div>
-                <div id="aiTopicInspector" style="border:1px solid var(--line);border-radius:6px;padding:12px;background:var(--paper);max-height:460px;overflow-y:auto;"></div>
+                <div style="font-size:12.5px;color:var(--ink-2);">不依赖网络与大模型，直接依据原题章节与导入笔记的关键词快速汇总成「知识点 + 对应真题」结构。</div>
+                <button type="button" class="btn btn-carbon" id="aiOfflineBtn" onclick="startAiFusion('offline')">⚡ 立即按章节与笔记离线归类 →</button>
               </div>
             </div>
 
-            <div class="ai-card">
-              <div class="ai-card-head">
-                <h3>自由搭配融合导出成品（可任意组合全选）</h3>
-                <span class="mono" style="font-size:11px;color:var(--jade);">10.5PT A4 + ANKI + MARKDOWN + ZIP</span>
+            <!-- Mode C: Local WorkBuddy CLI / Ollama -->
+            <div class="ai-mode-pane" id="aiModePaneCli" style="display:none;">
+              <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
+                <span style="font-size:12px;font-weight:600;">已探测本机工具：</span>
+                <div id="aiCliDetectedList" style="display:flex;flex-wrap:wrap;gap:6px;"></div>
+                <button type="button" class="ollama-pill" onclick="probeOllamaModels()">🔍 探测本机 Ollama 模型</button>
+                <div id="ollamaDetectedList" style="display:flex;flex-wrap:wrap;gap:5px;"></div>
               </div>
-              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px;">
-                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="fused_pdf" checked> 融合精讲 A4 PDF</label>
-                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="anki" checked> 分考点 Anki 记忆卡 (.tsv)</label>
-                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="md" checked> 分考点 Markdown 讲义 (.md)</label>
-                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="zip"> 分考点专题归档包 (.zip)</label>
-                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="json"> 可续编辑知识图谱 (.json)</label>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+                <div style="font-size:12px;color:var(--ink-2);">当前目标：<span class="mono" id="aiCliCurrentLabel">本机 WorkBuddy / Ollama</span></div>
+                <button type="button" class="btn btn-carbon" onclick="startLocalAgentFusion()">🖥️ 用所选本机模型 / WorkBuddy CLI 智能融合 →</button>
               </div>
-              <div style="display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding-top:8px;border-top:1px solid var(--line);">
-                <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;font-size:12px;color:var(--ink-2);">
-                  <label><input type="checkbox" id="aiIncNotes" checked> 附笔记精要与公式</label>
-                  <label><input type="checkbox" id="aiIncQs" checked> 附原题与解析</label>
-                  <label><input type="checkbox" id="aiIncImgs" checked> 内嵌板书图参考</label>
-                  <select class="select" id="aiVariantSel" style="width:auto;height:30px;padding:0 8px;font-size:12px;">
-                    <option value="withAnswersRed">朱批红标答案</option>
-                    <option value="withAnswersPlain">墨字附答案</option>
-                    <option value="withoutAnswers">空白复习卷</option>
-                  </select>
+            </div>
+
+            <!-- Mode D: Cloud Multimodal API -->
+            <div class="ai-mode-pane" id="aiModePaneApi" style="display:none;">
+              <div style="display:grid;grid-template-columns:1.2fr 1.2fr auto;gap:8px;align-items:end;">
+                <div>
+                  <label class="sec-label" for="aiPresetSel" style="margin-top:0;">模型平台预设</label>
+                  <select class="select" id="aiPresetSel" onchange="onAiPresetChange()" style="height:34px;"></select>
                 </div>
-                <button type="button" class="btn btn-carbon" id="aiExportBtn" onclick="exportAiBundle()" style="min-width:190px;height:38px;">
+                <div>
+                  <label class="sec-label" for="aiApiKey" style="margin-top:0;">API Key（仅存本机）</label>
+                  <input class="input" id="aiApiKey" type="password" onchange="saveAiConfigDraft()" placeholder="sk-...（Ollama 或 CLI 可留空）" style="height:34px;">
+                </div>
+                <button type="button" class="btn btn-carbon" id="aiRunBtn" style="height:34px;" onclick="startAiFusion('ai')">多模态 AI 自动分类 →</button>
+              </div>
+              <details class="ai-adv">
+                <summary>高级模型参数与连通测试（可选：Base URL / 模型名 / 单批题数 / 梳理偏好）</summary>
+                <div style="display:grid;grid-template-columns:1.4fr 1fr 84px auto;gap:8px;margin-top:8px;align-items:end;">
+                  <div>
+                    <label class="sec-label" for="aiBaseUrl" style="margin-top:0;">接口地址 (Base URL)</label>
+                    <input class="input" id="aiBaseUrl" onchange="saveAiConfigDraft()" style="height:32px;font-size:12px;">
+                  </div>
+                  <div>
+                    <label class="sec-label" for="aiModelName" style="margin-top:0;">模型名称</label>
+                    <input class="input" id="aiModelName" onchange="saveAiConfigDraft()" style="height:32px;font-size:12px;">
+                  </div>
+                  <div>
+                    <label class="sec-label" for="aiBatchSize" style="margin-top:0;">单批题数</label>
+                    <input class="input" id="aiBatchSize" type="number" min="5" max="60" value="24" onchange="saveAiConfigDraft()" style="height:32px;font-size:12px;">
+                  </div>
+                  <button type="button" class="btn btn-outline" style="height:32px;font-size:12px;" onclick="testAiConnection()">测试连通</button>
+                </div>
+                <div style="margin-top:8px;">
+                  <input class="input" id="aiCustomPrompt" onchange="saveAiConfigDraft()" placeholder="附加梳理偏好（可选，如：重点提炼计算公式与易错概念辨析）" style="height:32px;font-size:12px;">
+                </div>
+              </details>
+            </div>
+
+            <div class="progress-track" id="aiProgTrack" style="margin-top:10px;"><div class="progress-fill" id="aiProgFill"></div></div>
+            <div class="mono" id="aiProgMsg" style="font-size:11.5px;color:var(--ink-2);margin-top:6px;">提示：第 ① 步载入题库和笔记后，任选一种整理方式即可生成「知识点 + 接题」知识树。</div>
+          </div>
+
+          <!-- Step 3: Interactive Knowledge-to-Question Preview & Rich Multi-Format Export -->
+          <div class="ai-card">
+            <div class="ai-card-head">
+              <h3><span class="step-pill">3</span> 知识点组合接题预览与多格式导出</h3>
+              <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+                <input class="input" id="aiWorkspaceTitle" value="考点智能融合复习讲义" style="font-weight:700;height:32px;width:240px;font-size:12.5px;" onchange="syncTopicsToPython()">
+                <button type="button" class="btn btn-outline" style="height:30px;padding:0 10px;font-size:11.5px;" onclick="addCustomTopic()">+ 新增考点</button>
+                <button type="button" class="btn btn-outline" style="height:30px;padding:0 10px;font-size:11.5px;" onclick="mergeSelectedTopic()">合并当前考点…</button>
+              </div>
+            </div>
+
+            <div id="aiEmptyTree" class="empty-state" style="padding:30px 20px;margin-bottom:14px;">
+              尚未生成考点知识树：完成第 ① ② 步后，这里将按「每个知识点精讲 + 紧接对应真题」展示，支持调题与修改摘要。
+            </div>
+            <div class="ai-tree-grid" id="aiTreeGrid" style="display:none;margin-bottom:16px;">
+              <div class="ai-topic-list" id="aiTopicList"></div>
+              <div id="aiTopicInspector" style="border:1px solid var(--line);border-radius:6px;padding:14px;background:var(--paper);max-height:520px;overflow-y:auto;"></div>
+            </div>
+
+            <div style="border-top:1px solid var(--line);padding-top:14px;">
+              <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-bottom:10px;font-size:12px;">
+                <strong style="font-size:12.5px;">编排方式：</strong>
+                <select class="select" id="aiLayoutSel" style="width:auto;height:32px;padding:0 10px;font-size:12px;">
+                  <option value="inline">讲练一体（每知识点精要后紧接对应真题）</option>
+                  <option value="compact_answers_end">先练后对（每知识点后接空白题 + 节末答案核对）</option>
+                  <option value="split">讲练分册（前半册全考点串讲 + 后半册分考点题集）</option>
+                </select>
+                <select class="select" id="aiVariantSel" style="width:auto;height:32px;padding:0 10px;font-size:12px;">
+                  <option value="withAnswersRed">朱批红标答案</option>
+                  <option value="withAnswersPlain">墨字附答案</option>
+                  <option value="withoutAnswers">空白自测卷</option>
+                </select>
+                <label><input type="checkbox" id="aiIncNotes" checked> 附笔记精要</label>
+                <label><input type="checkbox" id="aiIncQs" checked> 附配套原题</label>
+                <label><input type="checkbox" id="aiIncImgs" checked> 内嵌板书图</label>
+              </div>
+
+              <div style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="fused_pdf" checked> A4 精讲 PDF (.pdf)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="docx" checked> Word 讲义 (.docx)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="html" checked> 交互刷题网页 (.html)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="xlsx"> Excel 分考点表 (.xlsx)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="md"> Markdown (.md)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="anki"> Anki 记忆卡 (.tsv)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="zip"> 单考点专题包 (.zip)</label>
+                <label class="check-pill"><input type="checkbox" class="ai-out-chk" value="json"> 知识图谱 (.json)</label>
+              </div>
+
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+                <span class="mono" style="font-size:11px;color:var(--jade);">支持：A4 PDF · WORD · 交互 HTML 刷题 · EXCEL · MARKDOWN · ANKI · 专题 ZIP</span>
+                <button type="button" class="btn btn-carbon" id="aiExportBtn" onclick="exportAiBundle()" style="min-width:210px;height:38px;">
                   一键导出已选全部成品 →
                 </button>
               </div>
@@ -1302,6 +1395,10 @@
       </div>
     </section>
   </main>
+</div>
+
+<div class="drag-curtain" id="dragCurtain">
+  <div class="drag-curtain-box">📥 松开鼠标即可智能导入题库 / 课堂笔记 / 板书照片</div>
 </div>
 
 <!-- Activity Slide-over Drawer -->
@@ -2180,36 +2277,120 @@ function initBridge() {
   });
 }
 
-/* ── v5 AI Multimodal Knowledge Fusion Logic ────────────────────────────── */
+/* ── v5.1 Simplified AI Plugin, Drag-Drop, & Handout Preview ───────────── */
 let aiPresets = [];
+let aiCliAgents = [];
+let aiActiveMode = 'web';
+let aiEditMode = false;
 let aiWorkspace = { title: '考点智能融合复习讲义', source_label: '', questionCount: 0, questions: [], notes: [], topics: [] };
 let activeAiTopicIdx = 0;
 
+window.addEventListener('dragover', e => { e.preventDefault(); });
+window.addEventListener('drop', e => {
+  e.preventDefault();
+  window._setDragOverlay(false);
+});
+window._setDragOverlay = function(active) {
+  const c = qs('dragCurtain');
+  if (c) c.classList.toggle('show', !!active);
+  const dz = qs('aiDropZone');
+  if (dz) dz.classList.toggle('drag-over', !!active);
+};
+window._resolveDropTarget = function(x, y) {
+  const el = document.elementFromPoint(x, y);
+  const zoneEl = el && el.closest ? el.closest('[data-drop-zone]') : null;
+  if (zoneEl && zoneEl.dataset && zoneEl.dataset.dropZone) return zoneEl.dataset.dropZone;
+  return currentView === 'workspace' ? 'workspace' : 'auto';
+};
+
+document.addEventListener('paste', e => {
+  if (currentView !== 'plugins' || !bridge || !bridge.pasteAiClipboardImage) return;
+  const activeTag = (document.activeElement && document.activeElement.tagName || '').toUpperCase();
+  if (activeTag === 'TEXTAREA' || activeTag === 'INPUT') {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    const hasImg = Array.from(items).some(it => it.type && it.type.startsWith('image/'));
+    if (!hasImg) return;
+  }
+  const items = (e.clipboardData && e.clipboardData.items) || [];
+  for (const it of items) {
+    if (it.type && it.type.startsWith('image/')) {
+      const file = it.getAsFile();
+      if (!file) continue;
+      const reader = new FileReader();
+      reader.onload = ev => {
+        bridge.pasteAiClipboardImage('剪贴板截图', String(ev.target.result || ''), resStr => {
+          const r = JSON.parse(resStr);
+          showToast(r.ok ? r.message : (r.error || '粘贴失败'));
+        });
+      };
+      reader.readAsDataURL(file);
+      e.preventDefault();
+      break;
+    }
+  }
+});
+
 function initAiPluginUI(state) {
   aiPresets = state.aiPresets || [];
+  aiCliAgents = state.aiCliAgents || [];
   const sel = qs('aiPresetSel');
   if (sel && aiPresets.length) {
     sel.innerHTML = aiPresets.map(p => `<option value="${escapeHtml(p.key)}">${escapeHtml(p.label)}</option>`).join('');
   }
   const cfg = state.aiConfig || {};
   if (cfg.preset && sel) sel.value = cfg.preset;
-  if (qs('aiBaseUrl')) qs('aiBaseUrl').value = cfg.base_url || 'http://127.0.0.1:11434';
+  if (qs('aiBaseUrl')) qs('aiBaseUrl').value = cfg.base_url || 'https://dashscope.aliyuncs.com/compatible-mode/v1';
   if (qs('aiApiKey')) qs('aiApiKey').value = cfg.api_key || '';
-  if (qs('aiModelName')) qs('aiModelName').value = cfg.model || 'qwen2.5vl:7b';
+  if (qs('aiModelName')) qs('aiModelName').value = cfg.model || 'qwen-vl-max-latest';
   if (qs('aiBatchSize')) qs('aiBatchSize').value = cfg.batch_size || 24;
   if (qs('aiCustomPrompt')) qs('aiCustomPrompt').value = cfg.custom_prompt || '';
+  renderCliAgentPills();
   if (state.aiWorkspace) {
     aiWorkspace = state.aiWorkspace;
     renderAiWorkspace();
   }
 }
 
+function renderCliAgentPills() {
+  const box = qs('aiCliDetectedList');
+  if (!box) return;
+  if (!aiCliAgents.length) {
+    box.innerHTML = '<span style="font-size:11.5px;color:var(--ink-3);">未检测到本机 CLI（可在右侧探测本机 Ollama 或用「免 API 千问/WorkBuddy」）</span>';
+    return;
+  }
+  box.innerHTML = aiCliAgents.map(a =>
+    `<button type="button" class="ollama-pill" onclick="selectCliAgent('${escapeHtml(a.cmd)}','${escapeHtml(a.kind)}')">${escapeHtml(a.label)}</button>`
+  ).join('');
+}
+
+function selectCliAgent(cmd, kind) {
+  if (kind === 'gui') {
+    prepareWorkBuddyPack();
+    return;
+  }
+  if (qs('aiPresetSel')) qs('aiPresetSel').value = 'workbuddy_cli';
+  if (qs('aiBaseUrl')) qs('aiBaseUrl').value = cmd;
+  if (qs('aiModelName')) qs('aiModelName').value = 'auto';
+  if (qs('aiCliCurrentLabel')) qs('aiCliCurrentLabel').textContent = `CLI: ${cmd}`;
+  saveAiConfigDraft();
+  showToast(`已选中本机智能体 CLI：${cmd}`);
+}
+
+function switchAiMode(mode) {
+  aiActiveMode = mode;
+  document.querySelectorAll('.ai-mode-card').forEach(el => el.classList.toggle('active', el.dataset.mode === mode));
+  qs('aiModePaneWeb').style.display = mode === 'web' ? 'block' : 'none';
+  qs('aiModePaneOffline').style.display = mode === 'offline' ? 'block' : 'none';
+  qs('aiModePaneCli').style.display = mode === 'cli' ? 'block' : 'none';
+  qs('aiModePaneApi').style.display = mode === 'api' ? 'block' : 'none';
+}
+
 function collectAiProfile() {
-  const key = qs('aiPresetSel').value || 'ollama';
+  const key = (qs('aiPresetSel') && qs('aiPresetSel').value) || 'qwen_api';
   const preset = aiPresets.find(p => p.key === key) || {};
   return {
     preset: key,
-    provider: preset.provider || (key === 'ollama' ? 'ollama' : 'openai'),
+    provider: preset.provider || (key === 'ollama' ? 'ollama' : (key === 'workbuddy_cli' ? 'cli' : 'openai')),
     base_url: qs('aiBaseUrl').value.trim(),
     api_key: qs('aiApiKey').value.trim(),
     model: qs('aiModelName').value.trim(),
@@ -2236,8 +2417,9 @@ function onAiPresetChange() {
 
 function probeOllamaModels() {
   if (!bridge || !bridge.probeOllamaModels) return;
-  qs('ollamaDetectedList').innerHTML = '<span style="font-size:11px;color:var(--ink-3);">正在扫描本机 Ollama 模型…</span>';
-  bridge.probeOllamaModels(qs('aiBaseUrl').value.trim() || 'http://127.0.0.1:11434');
+  qs('ollamaDetectedList').innerHTML = '<span style="font-size:11px;color:var(--ink-3);">正在扫描本机 Ollama…</span>';
+  const base = qs('aiBaseUrl').value.includes('11434') ? qs('aiBaseUrl').value.trim() : 'http://127.0.0.1:11434';
+  bridge.probeOllamaModels(base);
 }
 
 function testAiConnection() {
@@ -2246,21 +2428,73 @@ function testAiConnection() {
   bridge.testAiModel(JSON.stringify(collectAiProfile()));
 }
 
+function openAiWorkbench(siteKey) {
+  if (!bridge || !bridge.openAiWebWorkbench) return;
+  if (!aiWorkspace.questionCount) return showToast('请先在第 ① 步导入或载入题库');
+  bridge.openAiWebWorkbench(siteKey || 'qianwen');
+  showToast('已生成题库与笔记整理指令并打开助手窗口');
+}
+
+function prepareWorkBuddyPack() {
+  if (!bridge || !bridge.prepareWorkBuddyHandoff) return;
+  if (!aiWorkspace.questionCount) return showToast('请先在第 ① 步导入或载入题库');
+  bridge.prepareWorkBuddyHandoff(resStr => {
+    const res = JSON.parse(resStr);
+    if (!res.ok) return showToast(res.error || '生成任务包失败');
+    showToast(res.launchedGui
+      ? '已打开 WorkBuddy 与任务包目录（指令已复制到剪贴板）'
+      : '已打开任务包目录并将指令复制到剪贴板，可拖入 WorkBuddy 处理');
+  });
+}
+
+function togglePasteReplyBox() {
+  const w = qs('aiReplyPasteWrap');
+  w.style.display = w.style.display === 'none' ? 'block' : 'none';
+}
+
+function applyClipboardReply() {
+  if (!bridge || !bridge.applyExternalAiReply) return;
+  bridge.applyExternalAiReply('', resStr => {
+    const res = JSON.parse(resStr);
+    showToast(res.ok ? res.message : (res.error || '未检测到有效 AI 回复'));
+  });
+}
+
+function applyPastedReplyBox() {
+  if (!bridge || !bridge.applyExternalAiReply) return;
+  const txt = qs('aiReplyPasteArea').value.trim();
+  bridge.applyExternalAiReply(txt, resStr => {
+    const res = JSON.parse(resStr);
+    if (res.ok) qs('aiReplyPasteWrap').style.display = 'none';
+    showToast(res.ok ? res.message : (res.error || '解析失败'));
+  });
+}
+
+function startLocalAgentFusion() {
+  if (!aiWorkspace.questionCount) return showToast('请先在第 ① 步导入或载入题库');
+  const prof = collectAiProfile();
+  if (prof.provider !== 'ollama' && prof.provider !== 'cli') {
+    if (qs('aiPresetSel')) qs('aiPresetSel').value = 'workbuddy_cli';
+    onAiPresetChange();
+  }
+  startAiFusion('ai');
+}
+
 function refreshAiTaskPicker() {
   const sel = qs('aiTaskPickSel');
   if (!sel) return;
   const curVal = sel.value;
   const snaps = tasksCache.filter(t => t.status === 'success' && t.has_snapshot);
-  sel.innerHTML = '<option value="">从已完成归档任务导入…</option>' + snaps.map(t =>
+  sel.innerHTML = '<option value="">切换历史导出任务…</option>' + snaps.map(t =>
     `<option value="${t.id}">#${t.id} ${escapeHtml(t.title)} (${t.question_count || '?'}题)</option>`
   ).join('');
   if (curVal) sel.value = curVal;
 }
 
-function loadSelectedSnapshotTask() {
-  const tid = Number(qs('aiTaskPickSel').value);
-  if (!tid) return showToast('请先在下拉框选一个已导出的任务');
-  sendTaskToAiPlugin(tid);
+function loadLatestSnapshotOrPick() {
+  const snaps = tasksCache.filter(t => t.status === 'success' && t.has_snapshot);
+  if (!snaps.length) return showToast('暂无刚导出的任务快照，可直接把题库拖进上方虚线框');
+  sendTaskToAiPlugin(snaps[0].id);
 }
 
 function sendTaskToAiPlugin(taskId) {
@@ -2306,18 +2540,18 @@ function removeAiNote(nid) {
 function analyzeSingleNote(nid) {
   if (!bridge || !bridge.analyzeSingleAiNote) return;
   qs('aiProgTrack').classList.add('show');
-  qs('aiProgMsg').textContent = '正在调用多模态模型识别该笔记/板书…';
+  qs('aiProgMsg').textContent = '正在调用大模型识别该笔记/板书…';
   bridge.analyzeSingleAiNote(nid, JSON.stringify(collectAiProfile()));
 }
 
 function startAiFusion(mode) {
   if (!bridge || !bridge.runAiFusion) return;
   if (!aiWorkspace.questionCount) return showToast('请先载入题库数据源');
-  qs('aiRunBtn').disabled = true;
-  qs('aiOfflineBtn').disabled = true;
+  if (qs('aiRunBtn')) qs('aiRunBtn').disabled = true;
+  if (qs('aiOfflineBtn')) qs('aiOfflineBtn').disabled = true;
   qs('aiProgTrack').classList.add('show');
   qs('aiProgFill').style.width = '8%';
-  qs('aiProgMsg').textContent = mode === 'offline' ? '正在执行离线章节/笔记关键词归类…' : '正在提交多模态 AI 考点分类任务…';
+  qs('aiProgMsg').textContent = mode === 'offline' ? '正在执行离线章节/笔记关键词归类…' : '正在提交 AI 智能考点分类任务…';
   bridge.runAiFusion(JSON.stringify({
     mode,
     title: qs('aiWorkspaceTitle').value.trim() || '考点智能融合',
@@ -2327,35 +2561,31 @@ function startAiFusion(mode) {
 
 function renderAiWorkspace() {
   qs('aiQCountBadge').textContent = `${aiWorkspace.questionCount || 0} 题`;
-  qs('aiNoteCountBadge').textContent = `${(aiWorkspace.notes || []).length} 份`;
+  qs('aiNoteCountBadge').textContent = `${(aiWorkspace.notes || []).length} 份资料`;
   qs('aiWorkspaceTitle').value = aiWorkspace.title || '考点智能融合复习讲义';
   qs('aiQSourceInfo').textContent = aiWorkspace.questionCount
-    ? `当前已载入：${aiWorkspace.title}（${aiWorkspace.questionCount} 道完整题目，来源：${aiWorkspace.source_label || '本地'}）`
-    : '尚未加载题库：可一键载入刚导出的任务，或导入 .json/.xlsx/.docx/.md 文件。';
+    ? `✓ 当前题库：《${aiWorkspace.title}》（${aiWorkspace.questionCount} 道完整题目 · 来源：${aiWorkspace.source_label || '本地'}）`
+    : '尚未加载题库：可直接拖入题库文件，或点击上方「一键载入最近导出题库」。';
 
   const nBox = qs('aiNotesList');
   const notes = aiWorkspace.notes || [];
-  if (!notes.length) {
-    nBox.innerHTML = '<div style="font-size:12px;color:var(--ink-3);padding:8px 0;">支持手机课堂板书拍照 (PNG/JPG)、课件 PDF、PPTX、Word 或 Markdown 笔记。</div>';
-  } else {
-    nBox.innerHTML = notes.map(n => `
-      <div class="ai-note-item">
-        ${n.image_data_uri
-          ? `<img class="ai-note-thumb" src="${escapeHtml(n.image_data_uri)}" alt="${escapeHtml(n.title)}">`
-          : `<div class="ai-note-thumb">${escapeHtml((n.source_type || 'TXT').toUpperCase())}</div>`}
-        <div style="min-width:0;flex:1;">
-          <div style="font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(n.title)}</div>
-          <div style="font-size:11px;color:var(--ink-2);margin-top:2px;">
-            ${n.ocr_summary ? `<span style="color:var(--jade);font-weight:600;">✓ 已提炼 · ${escapeHtml(n.suggested_topic || '考点')}</span>` : escapeHtml((n.raw_preview || '图片板书（点击识别或融合时自动识图）').slice(0, 48))}
-          </div>
-          <div style="display:flex;gap:8px;margin-top:4px;">
-            <button type="button" class="desk-link" style="font-size:11px;" onclick="analyzeSingleNote('${escapeHtml(n.id)}')">多模态单条解析</button>
-            <button type="button" class="desk-link" style="font-size:11px;color:var(--vermilion);" onclick="removeAiNote('${escapeHtml(n.id)}')">移除</button>
-          </div>
+  nBox.innerHTML = notes.map(n => `
+    <div class="ai-note-item">
+      ${n.image_data_uri
+        ? `<img class="ai-note-thumb" src="${escapeHtml(n.image_data_uri)}" alt="${escapeHtml(n.title)}">`
+        : `<div class="ai-note-thumb">${escapeHtml((n.source_type || 'TXT').toUpperCase())}</div>`}
+      <div style="min-width:0;flex:1;">
+        <div style="font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(n.title)}</div>
+        <div style="font-size:11px;color:var(--ink-2);margin-top:2px;">
+          ${n.ocr_summary ? `<span style="color:var(--jade);font-weight:600;">✓ 已提炼 · ${escapeHtml(n.suggested_topic || '考点')}</span>` : escapeHtml((n.raw_preview || '图片板书').slice(0, 40))}
+        </div>
+        <div style="display:flex;gap:8px;margin-top:4px;">
+          <button type="button" class="desk-link" style="font-size:11px;" onclick="analyzeSingleNote('${escapeHtml(n.id)}')">识别提炼</button>
+          <button type="button" class="desk-link" style="font-size:11px;color:var(--vermilion);" onclick="removeAiNote('${escapeHtml(n.id)}')">移除</button>
         </div>
       </div>
-    `).join('');
-  }
+    </div>
+  `).join('');
 
   const topics = aiWorkspace.topics || [];
   qs('aiEmptyTree').style.display = topics.length ? 'none' : 'block';
@@ -2369,7 +2599,7 @@ function renderAiWorkspace() {
         <span style="font-weight:600;font-size:12.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${idx + 1}. ${escapeHtml(tp.name)}</span>
         <span class="imp-badge ${escapeHtml(tp.importance)}">${escapeHtml(tp.importance)}</span>
       </div>
-      <div class="mono" style="font-size:11px;color:var(--ink-3);margin-top:4px;">${(tp.question_ids || []).length} 题 · ${(tp.note_ids || []).length} 笔记</div>
+      <div class="mono" style="font-size:11px;color:var(--ink-3);margin-top:4px;">${(tp.question_ids || []).length} 道配套真题</div>
     </div>
   `).join('');
 
@@ -2378,7 +2608,13 @@ function renderAiWorkspace() {
 
 function selectAiTopic(idx) {
   activeAiTopicIdx = idx;
+  aiEditMode = false;
   renderAiWorkspace();
+}
+
+function toggleTopicEditMode() {
+  aiEditMode = !aiEditMode;
+  renderTopicInspector();
 }
 
 function renderTopicInspector() {
@@ -2406,20 +2642,27 @@ function renderTopicInspector() {
     `;
   }).join('') || '<div style="font-size:12px;color:var(--ink-3);padding:8px 0;">该考点下暂无题目，可从其他考点调入。</div>';
 
+  const summaryBlock = aiEditMode
+    ? `<label class="sec-label" style="margin-top:4px;">融合笔记精要</label>
+       <textarea class="ai-textarea" rows="4" onchange="editActiveTopicField('summary_md', this.value)">${escapeHtml(tp.summary_md)}</textarea>
+       <label class="sec-label" style="margin-top:8px;">核心公式与结论（每行一条）</label>
+       <textarea class="ai-textarea" rows="2" onchange="editActiveTopicField('formulas', this.value.split('\\n').map(x=>x.trim()).filter(Boolean))">${escapeHtml((tp.formulas || []).join('\n'))}</textarea>`
+    : `<div class="handout-box">${escapeHtml(tp.summary_md || '暂无笔记精要，点击右上方「✎ 编辑精要」可随时补充。')}${(tp.formulas || []).length ? `<div style="margin-top:6px;padding-top:6px;border-top:1px dashed var(--line);color:var(--jade);font-weight:600;">核心公式：${(tp.formulas || []).map(escapeHtml).join('  ·  ')}</div>` : ''}</div>`;
+
   box.innerHTML = `
-    <div style="display:grid;grid-template-columns:1fr 120px;gap:8px;margin-bottom:10px;">
-      <input class="input" value="${escapeHtml(tp.name)}" style="font-weight:700;height:34px;" onchange="editActiveTopicField('name', this.value)">
-      <select class="select" style="height:34px;font-size:12px;" onchange="editActiveTopicField('importance', this.value)">
-        <option value="核心高频" ${tp.importance === '核心高频' ? 'selected' : ''}>核心高频</option>
-        <option value="重要掌握" ${tp.importance === '重要掌握' ? 'selected' : ''}>重要掌握</option>
-        <option value="基础了解" ${tp.importance === '基础了解' ? 'selected' : ''}>基础了解</option>
-      </select>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <div style="display:flex;gap:8px;align-items:center;flex:1;min-width:200px;">
+        <input class="input" value="${escapeHtml(tp.name)}" style="font-weight:700;height:34px;" onchange="editActiveTopicField('name', this.value)">
+        <select class="select" style="width:110px;height:34px;font-size:12px;" onchange="editActiveTopicField('importance', this.value)">
+          <option value="核心高频" ${tp.importance === '核心高频' ? 'selected' : ''}>核心高频</option>
+          <option value="重要掌握" ${tp.importance === '重要掌握' ? 'selected' : ''}>重要掌握</option>
+          <option value="基础了解" ${tp.importance === '基础了解' ? 'selected' : ''}>基础了解</option>
+        </select>
+      </div>
+      <button type="button" class="btn btn-outline" style="height:30px;padding:0 10px;font-size:11.5px;" onclick="toggleTopicEditMode()">${aiEditMode ? '完成编辑 ✓' : '✎ 编辑精要/公式'}</button>
     </div>
-    <label class="sec-label" style="margin-top:4px;">融合笔记精要（可直接编辑修改）</label>
-    <textarea class="ai-textarea" rows="4" onchange="editActiveTopicField('summary_md', this.value)">${escapeHtml(tp.summary_md)}</textarea>
-    <label class="sec-label" style="margin-top:8px;">核心公式与结论（每行一条）</label>
-    <textarea class="ai-textarea" rows="2" onchange="editActiveTopicField('formulas', this.value.split('\\n').map(x=>x.trim()).filter(Boolean))">${escapeHtml((tp.formulas || []).join('\n'))}</textarea>
-    <label class="sec-label" style="margin-top:10px;">归属原题列表（${(tp.question_ids || []).length} 题）</label>
+    ${summaryBlock}
+    <label class="sec-label" style="margin-top:10px;">紧接配套真题（${(tp.question_ids || []).length} 题 · 支持右上角下拉调换考点）</label>
     <div>${qsHtml}</div>
   `;
 }
@@ -2453,6 +2696,7 @@ function addCustomTopic() {
     question_ids: [],
   });
   activeAiTopicIdx = aiWorkspace.topics.length - 1;
+  aiEditMode = true;
   syncTopicsToPython();
   renderAiWorkspace();
 }
@@ -2494,6 +2738,7 @@ function exportAiBundle() {
     title: qs('aiWorkspaceTitle').value.trim() || aiWorkspace.title,
     topics: aiWorkspace.topics || [],
     outputs,
+    layoutMode: qs('aiLayoutSel') ? qs('aiLayoutSel').value : 'inline',
     includeNotes: qs('aiIncNotes').checked,
     includeQuestions: qs('aiIncQs').checked,
     includeNoteImages: qs('aiIncImgs').checked,

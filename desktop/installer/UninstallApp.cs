@@ -49,12 +49,18 @@ namespace CCTRCloudSetup
             return 0;
         }
 
-        internal static void KillRunningApp()
+        internal static void KillRunningApp(string installDir)
         {
+            string normPrefix = installDir.TrimEnd('\\', '/') + "\\";
             foreach (var proc in Process.GetProcessesByName("CCTRCloudExportDesktop"))
             {
                 try
                 {
+                    string modPath = proc.MainModule != null ? proc.MainModule.FileName : "";
+                    if (string.IsNullOrEmpty(modPath) || !modPath.StartsWith(normPrefix, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
                     proc.Kill();
                     proc.WaitForExit(3000);
                 }
@@ -67,7 +73,7 @@ namespace CCTRCloudSetup
         internal static void PerformUninstall(string installDir, bool purgeUserData, Action<string> log)
         {
             log("正在关闭运行中的桌面端进程...");
-            KillRunningApp();
+            KillRunningApp(installDir);
 
             string desktopShortcut = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
@@ -93,6 +99,7 @@ namespace CCTRCloudSetup
 
             string desktopExe = Path.Combine(installDir, "CCTRCloudExportDesktop.exe");
             TryDeleteFile(desktopExe, log);
+            TryDeleteDir(Path.Combine(installDir, "_internal"), log);
 
             if (purgeUserData)
             {

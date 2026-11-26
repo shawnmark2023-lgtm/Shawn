@@ -18,6 +18,7 @@ from PySide6.QtWebChannel import QWebChannel
 from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile, QWebEngineScript, QWebEngineSettings
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWidgets import (
+    QApplication,
     QDialog,
     QFileDialog,
     QHBoxLayout,
@@ -53,6 +54,7 @@ from ..core.formats import (
 from ..plugins import list_registered_plugins
 from ..plugins.ai_knowledge import (
     PROVIDER_PRESETS,
+    WEB_ASSISTANT_PRESETS,
     KnowledgeTopic,
     KnowledgeWorkspace,
     ModelProfile,
@@ -60,12 +62,18 @@ from ..plugins.ai_knowledge import (
     NoteItem,
     ai_classify_and_fuse,
     analyze_note_item,
+    build_workbench_handoff_pack,
+    classify_and_import_dropped_paths,
     export_knowledge_bundle,
+    get_handoff_dir,
     import_note_file,
+    import_note_from_data_uri,
     load_ai_config,
     load_questions_from_task_snapshot,
     load_workspace_from_json,
     offline_classify_and_fuse,
+    parse_external_assistant_reply,
+    probe_local_cli_agents,
     save_ai_config,
 )
 from ..core.kernels import (
@@ -796,6 +804,309 @@ class PlatformBrowserDialog(QDialog):
         super().closeEvent(event)
 
 
+class _DroppedFilesWorker(QThread):
+    """后台智能分类解析拖拽入窗口的本地题库/笔记/知识图谱文件。"""
+
+    done = Signal(str, object)
+
+    def __init__(self, paths: list[str], zone: str):
+        super().__init__()
+        self._paths = list(paths)
+        self._zone = zone
+
+    def run(self):
+        try:
+            if self._zone == "workspace":
+                practices = []
+                errors = []
+                for fp in self._paths:
+                    try:
+                        title, qs = import_questions_from_file(fp)
+                        practices.append(save_local_bank(title, qs).to_json())
+                    except Exception as e:
+                        errors.append(f"{Path(fp).name}: {e}")
+                payload = {
+                    "ok": bool(practices),
+                    "practices": practices,
+                    "sourceLabel": "拖拽导入题库",
+                    "error": "; ".join(errors),
+                }
+                self.done.emit(self._zone, payload)
+            else:
+                res = classify_and_import_dropped_paths(self._paths, zone_hint=self._zone)
+                self.done.emit(self._zone, res)
+        except Exception as e:
+            self.done.emit(self._zone, {"ok": False, "error": str(e), "errors": [str(e)]})
+
+
+_FILL_CHAT_PROMPT_JS = """(function(promptText) {
+  const candidates = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]'))
+    .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly);
+  const el = candidates.sort((a, b) => (b.getBoundingClientRect().top || 0) - (a.getBoundingClientRect().top || 0))[0];
+  if (!el) return JSON.stringify({filled: false});
+  el.focus();
+  if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+    if (setter) setter.call(el, promptText); else el.value = promptText;
+    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new Event('change', {bubbles: true}));
+  } else {
+    el.innerText = promptText;
+    el.dispatchEvent(new InputEvent('input', {bubbles: true, data: promptText}));
+  }
+  return JSON.stringify({filled: true});
+})"""
+
+_EXTRACT_ASSISTANT_REPLY_JS = """(function() {
+  const pres = Array.from(document.querySelectorAll('pre, code'))
+    .map(n => (n.innerText || n.textContent || '').trim())
+    .filter(t => t.includes('"topics"') || t.includes('"name"'));
+  if (pres.length) return pres[pres.length - 1];
+  const sels = [
+    '[data-role="assistant"]', '.assistant-message', '.markdown-body', '.tongyi-markdown',
+    '[class*="markdown"]', '[class*="message-content"]', '[class*="hyc-content"]'
+  ];
+  for (const s of sels) {
+    const nodes = Array.from(document.querySelectorAll(s))
+      .map(n => (n.innerText || '').trim())
+      .filter(t => t.length > 30);
+    if (nodes.length) return nodes[nodes.length - 1];
+  }
+  const sel = (window.getSelection && String(window.getSelection() || '').trim()) || '';
+  return sel;
+})()"""
+
+
+class AiWebAssistantDialog(QDialog):
+    """免 API 内置大模型助手工作台（支持通义千问 / 腾讯元宝·WorkBuddy / DeepSeek / Kimi / 豆包）。"""
+
+    replyCaptured = Signal(str, str)  # raw_reply, assistant_label
+    _CHROME_UA = (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+    )
+
+    def __init__(self, parent=None, *, initial_key: str = "qianwen", handoff_info: dict | None = None):
+        super().__init__(parent)
+        self.setWindowTitle("CCTR Atelier · 免 API 千问 / WorkBuddy / AI 助手工作台")
+        self.resize(1240, 820)
+        self._handoff = handoff_info or {}
+        self._direct_mode = True
+        self._current_label = WEB_ASSISTANT_PRESETS.get(initial_key, WEB_ASSISTANT_PRESETS["qianwen"])[0]
+        self._apply_proxy_mode(True)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        top_wrap = QWidget(self)
+        top_wrap.setStyleSheet("background:#f4f3ef;border-bottom:1px solid #d8d4ca;")
+        top_box = QVBoxLayout(top_wrap)
+        top_box.setContentsMargins(10, 8, 10, 8)
+        top_box.setSpacing(6)
+
+        row1 = QHBoxLayout()
+        row1.setSpacing(6)
+        for key, (label, url) in WEB_ASSISTANT_PRESETS.items():
+            short = label.split("（")[0]
+            btn = QPushButton(short, self)
+            btn.setStyleSheet(
+                "QPushButton{padding:5px 10px;border:1px solid #cbc7bd;border-radius:5px;background:#fff;color:#141413;font-size:12px;}"
+                "QPushButton:hover{background:#eae7e0;}"
+            )
+            btn.clicked.connect(lambda _chk=False, u=url, lbl=short: self._switch_site(u, lbl))
+            row1.addWidget(btn)
+        row1.addStretch(1)
+
+        self._fill_btn = QPushButton("① 填入/复制题目指令", self)
+        self._fill_btn.setStyleSheet(
+            "QPushButton{padding:6px 12px;border:1px solid #cbc7bd;border-radius:5px;background:#fff;color:#141413;font-weight:600;font-size:12px;}"
+            "QPushButton:hover{background:#eae7e0;}"
+        )
+        self._fill_btn.clicked.connect(self._fill_and_copy_prompt)
+        row1.addWidget(self._fill_btn)
+
+        self._dir_btn = QPushButton("📂 WorkBuddy 任务包", self)
+        self._dir_btn.setStyleSheet(
+            "QPushButton{padding:6px 11px;border:1px solid #d7c39a;border-radius:5px;background:#fdf6e9;color:#925911;font-weight:600;font-size:12px;}"
+        )
+        self._dir_btn.clicked.connect(self._open_handoff_folder)
+        row1.addWidget(self._dir_btn)
+
+        self._extract_btn = QPushButton("② 提取 AI 回复并生成考点树 ✨", self)
+        self._extract_btn.setStyleSheet(
+            "QPushButton{padding:6px 14px;border:none;border-radius:5px;background:#1e6b4e;color:#faf9f6;font-weight:700;font-size:12px;}"
+            "QPushButton:hover{background:#18573f;}"
+        )
+        self._extract_btn.clicked.connect(self._extract_reply)
+        row1.addWidget(self._extract_btn)
+        top_box.addLayout(row1)
+
+        row2 = QHBoxLayout()
+        row2.setSpacing(6)
+        self._reload_btn = QPushButton("↻ 刷新", self)
+        self._reload_btn.setStyleSheet("QPushButton{padding:4px 10px;border:1px solid #cbc7bd;border-radius:5px;background:#fff;font-size:12px;}")
+        row2.addWidget(self._reload_btn)
+        self._url_edit = QLineEdit(self)
+        self._url_edit.setStyleSheet("padding:4px 8px;border:1px solid #cbc7bd;border-radius:5px;background:#fff;font-size:12px;")
+        row2.addWidget(self._url_edit, 1)
+        self._proxy_btn = QPushButton("直连模式 ✓", self)
+        self._proxy_btn.setStyleSheet("QPushButton{padding:4px 10px;border:1px solid #b5cfc4;border-radius:5px;background:#eef6f2;color:#1e6b4e;font-size:12px;font-weight:600;}")
+        self._proxy_btn.clicked.connect(self._toggle_proxy_mode)
+        row2.addWidget(self._proxy_btn)
+        self._status_lbl = QLabel("已将整理指令复制到剪贴板：登录后可直接粘贴（或点『① 填入指令』），回复完成后点『② 提取 AI 回复』", self)
+        self._status_lbl.setStyleSheet("color:#1e6b4e;font-size:12px;font-weight:600;padding:0 4px;")
+        row2.addWidget(self._status_lbl)
+        top_box.addLayout(row2)
+        root.addWidget(top_wrap)
+
+        profile_dir = Path.home() / ".cctr_export" / "web_ai_profile"
+        (profile_dir / "storage").mkdir(parents=True, exist_ok=True)
+        (profile_dir / "cache").mkdir(parents=True, exist_ok=True)
+        self._profile = QWebEngineProfile("cctr_ai_assistant_v5", self)
+        self._profile.setHttpUserAgent(self._CHROME_UA)
+        self._profile.setPersistentStoragePath(str(profile_dir / "storage"))
+        self._profile.setCachePath(str(profile_dir / "cache"))
+        self._profile.setPersistentCookiesPolicy(QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies)
+
+        self._page = QWebEnginePage(self._profile, self)
+        self._web = QWebEngineView(self)
+        self._web.setPage(self._page)
+        s = self._web.settings()
+        s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        s.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
+        root.addWidget(self._web, 1)
+
+        self._reload_btn.clicked.connect(lambda: self._web.triggerPageAction(QWebEnginePage.WebAction.ReloadAndBypassCache))
+        self._url_edit.returnPressed.connect(lambda: self._web.load(QUrl.fromUserInput(self._url_edit.text().strip())))
+        self._web.urlChanged.connect(lambda u: self._url_edit.setText(u.toString()))
+
+        _, start_url = WEB_ASSISTANT_PRESETS.get(initial_key, WEB_ASSISTANT_PRESETS["qianwen"])
+        self._url_edit.setText(start_url)
+        self._web.load(QUrl(start_url))
+
+    def _apply_proxy_mode(self, direct: bool) -> None:
+        self._direct_mode = direct
+        if direct:
+            QNetworkProxyFactory.setUseSystemConfiguration(False)
+            QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+        else:
+            QNetworkProxy.setApplicationProxy(QNetworkProxy(QNetworkProxy.ProxyType.DefaultProxy))
+            QNetworkProxyFactory.setUseSystemConfiguration(True)
+
+    def _toggle_proxy_mode(self) -> None:
+        self._apply_proxy_mode(not self._direct_mode)
+        self._proxy_btn.setText("直连模式 ✓" if self._direct_mode else "系统代理")
+        self._web.reload()
+
+    def _switch_site(self, url: str, label: str) -> None:
+        self._current_label = label
+        self._url_edit.setText(url)
+        self._web.load(QUrl(url))
+
+    def _fill_and_copy_prompt(self) -> None:
+        prompt = str(self._handoff.get("prompt_text") or "")
+        if not prompt:
+            return
+        QApplication.clipboard().setText(prompt)
+        js = f"({_FILL_CHAT_PROMPT_JS})({json.dumps(prompt, ensure_ascii=False)})"
+        self._page.runJavaScript(js, self._on_fill_result)
+
+    def _on_fill_result(self, raw) -> None:
+        try:
+            res = json.loads(raw) if isinstance(raw, str) else {}
+        except Exception:
+            res = {}
+        if res.get("filled"):
+            self._status_lbl.setText("✓ 已自动填入网页输入框（并同步复制到剪贴板），请点击发送给 AI！")
+        else:
+            self._status_lbl.setText("✓ 完整整理指令已在剪贴板：请在下方对话框按 Ctrl+V 粘贴并发送！")
+
+    def _open_handoff_folder(self) -> None:
+        hdir = Path(str(self._handoff.get("handoff_dir") or get_handoff_dir()))
+        if os.name == "nt":
+            os.startfile(str(hdir))
+        else:
+            subprocess.Popen(["xdg-open", str(hdir)])
+        self._status_lbl.setText(f"✓ 已打开任务包目录：{hdir.name}（可将其中 .md 与板书图直接拖入 WorkBuddy）")
+
+    def _extract_reply(self) -> None:
+        self._page.runJavaScript(_EXTRACT_ASSISTANT_REPLY_JS, self._on_reply_extracted)
+
+    def _on_reply_extracted(self, raw) -> None:
+        text = str(raw or "").strip()
+        if not text:
+            text = (QApplication.clipboard().text() or "").strip()
+        if not text:
+            self._status_lbl.setText("✗ 暂未提取到回复：请等 AI 输出完毕后再点『复制回复』或直接点击此按钮")
+            return
+        self.replyCaptured.emit(text, self._current_label)
+        self.accept()
+
+    def _cleanup(self) -> None:
+        if getattr(self, "_cleaned", False):
+            return
+        self._cleaned = True
+        self._web.stop()
+        self._web.setPage(None)
+        self._page.deleteLater()
+        self._profile.deleteLater()
+
+    def done(self, r: int) -> None:
+        self._cleanup()
+        super().done(r)
+
+    def closeEvent(self, event):
+        self._cleanup()
+        super().closeEvent(event)
+
+
+class _AtelierWebView(QWebEngineView):
+    """支持 Windows 资源管理器原生拖拽文件/文件夹导入，禁止意外跳转 file:// 页面。"""
+
+    def __init__(self, parent, bridge: "DesktopBridge"):
+        super().__init__(parent)
+        self._bridge = bridge
+        self.setAcceptDrops(True)
+
+    @staticmethod
+    def _extract_local_paths(mime) -> list[str]:
+        if not mime or not mime.hasUrls():
+            return []
+        return [u.toLocalFile() for u in mime.urls() if u.isLocalFile() and u.toLocalFile()]
+
+    def dragEnterEvent(self, event):
+        paths = self._extract_local_paths(event.mimeData())
+        if paths:
+            event.acceptProposedAction()
+            self.page().runJavaScript("window._setDragOverlay && window._setDragOverlay(true);")
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if self._extract_local_paths(event.mimeData()):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self.page().runJavaScript("window._setDragOverlay && window._setDragOverlay(false);")
+        event.accept()
+
+    def dropEvent(self, event):
+        self.page().runJavaScript("window._setDragOverlay && window._setDragOverlay(false);")
+        paths = self._extract_local_paths(event.mimeData())
+        if not paths:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        self.page().runJavaScript(
+            f"(function(){{ return (window._resolveDropTarget ? window._resolveDropTarget({int(pos.x())}, {int(pos.y())}) : 'auto'); }})()",
+            lambda zone: self._bridge.handleDroppedPaths(paths, str(zone or "auto")),
+        )
+
+
 class _KernelWorker(QThread):
     progress = Signal(int, str)
     done = Signal(str)
@@ -938,6 +1249,7 @@ class _AiExportWorker(QThread):
                 self._ws,
                 outputs=list(self._opts.get("outputs") or ["fused_pdf"]),
                 variant=str(self._opts.get("variant") or "withAnswersRed"),
+                layout_mode=str(self._opts.get("layoutMode") or "inline"),
                 smart_pagination=bool(self._opts.get("smartPagination", True)),
                 include_notes=bool(self._opts.get("includeNotes", True)),
                 include_questions=bool(self._opts.get("includeQuestions", True)),
@@ -1075,6 +1387,8 @@ class DesktopBridge(QObject):
             "plugins": list_registered_plugins(),
             "aiConfig": load_ai_config().to_dict(),
             "aiPresets": [{"key": k, **v} for k, v in PROVIDER_PRESETS.items()],
+            "aiWebPresets": [{"key": k, "label": v[0], "url": v[1]} for k, v in WEB_ASSISTANT_PRESETS.items()],
+            "aiCliAgents": probe_local_cli_agents(),
             "aiWorkspace": self._ai_ws_payload(),
             **self._tasks_and_logs_payload(),
         }
@@ -1615,6 +1929,140 @@ class DesktopBridge(QObject):
         w.done.connect(self.aiExportDone.emit)
         self._keep_worker(w)
 
+    def handleDroppedPaths(self, paths: list[str], zone: str = "auto"):
+        if not paths:
+            return
+        z = (zone or "auto").strip().lower()
+        w = _DroppedFilesWorker(paths, z)
+
+        def on_done(target_zone: str, res):
+            if target_zone == "workspace":
+                self.externalBanksLoaded.emit(json.dumps(res, ensure_ascii=False))
+                return
+            if not isinstance(res, dict):
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": "拖拽解析失败"}, ensure_ascii=False))
+                return
+            msgs = []
+            restored = res.get("restored_ws")
+            qs = res.get("questions") or []
+            q_titles = res.get("question_titles") or []
+            notes = res.get("notes") or []
+            errors = res.get("errors") or []
+
+            if restored is not None:
+                self._ai_ws = restored
+                msgs.append(f"恢复图谱「{restored.title}」")
+            if qs:
+                self._ai_ws.title = q_titles[0] if len(q_titles) == 1 else f"{q_titles[0]} 等{len(q_titles)}份"
+                self._ai_ws.source_label = "拖拽导入题库"
+                self._ai_ws.questions = qs
+                self._ai_ws.topics = []
+                msgs.append(f"载入题库 {len(qs)} 题")
+            if notes:
+                self._ai_ws.notes.extend(notes)
+                msgs.append(f"加入资料/板书 {len(notes)} 份")
+            if msgs:
+                self._emit_ai_ws()
+                summary = "已通过拖拽" + "、".join(msgs)
+                if errors:
+                    summary += f"（另有 {len(errors)} 个文件跳过）"
+                self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": summary}, ensure_ascii=False))
+            else:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": (errors[0] if errors else "未识别到支持的题库或课堂笔记格式")}, ensure_ascii=False))
+
+        w.done.connect(on_done)
+        self._keep_worker(w)
+
+    @Slot(str, str)
+    def importDroppedPathsJson(self, paths_json: str, zone: str = "auto"):
+        try:
+            paths = [str(p) for p in json.loads(paths_json) if str(p).strip()]
+        except Exception:
+            paths = []
+        self.handleDroppedPaths(paths, zone)
+
+    @Slot(str, str, result=str)
+    def pasteAiClipboardImage(self, title: str, data_uri: str) -> str:
+        try:
+            note = import_note_from_data_uri(title, data_uri)
+            self._ai_ws.notes.append(note)
+            self._emit_ai_ws()
+            return json.dumps({"ok": True, "message": f"已粘贴截图「{note.title}」"}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(result=str)
+    def detectLocalCliAgents(self) -> str:
+        return json.dumps({"ok": True, "agents": probe_local_cli_agents()}, ensure_ascii=False)
+
+    @Slot(result=str)
+    def prepareWorkBuddyHandoff(self) -> str:
+        try:
+            custom_p = load_ai_config().custom_prompt
+            pack = build_workbench_handoff_pack(self._ai_ws, custom_prompt=custom_p)
+            QApplication.clipboard().setText(pack["prompt_text"])
+            wb_gui = next((a["path"] for a in probe_local_cli_agents() if a.get("kind") == "gui"), "")
+            if os.name == "nt":
+                os.startfile(pack["handoff_dir"])
+                if wb_gui and Path(wb_gui).is_file():
+                    subprocess.Popen([wb_gui])
+            return json.dumps({"ok": True, "launchedGui": bool(wb_gui), **pack}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(str)
+    def openAiWebWorkbench(self, assistant_key: str):
+        try:
+            custom_p = load_ai_config().custom_prompt
+            pack = build_workbench_handoff_pack(self._ai_ws, custom_prompt=custom_p)
+            QApplication.clipboard().setText(pack["prompt_text"])
+        except Exception as e:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return
+        QTimer.singleShot(0, lambda k=assistant_key or "qianwen", info=pack: self._show_ai_web_workbench(k, info))
+
+    def _show_ai_web_workbench(self, assistant_key: str, handoff_info: dict):
+        parent_w = self._main_win()
+        dlg = AiWebAssistantDialog(parent_w, initial_key=assistant_key, handoff_info=handoff_info)
+        dlg.setModal(False)
+        self._ai_web_dlg = dlg
+
+        def _on_captured(raw_reply: str, src_lbl: str):
+            res_json = self._apply_external_reply_core(raw_reply, src_lbl)
+            self.aiFusionDone.emit(res_json)
+
+        dlg.replyCaptured.connect(_on_captured)
+        dlg.finished.connect(lambda _r: setattr(self, "_ai_web_dlg", None) if getattr(self, "_ai_web_dlg", None) is dlg else None)
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _apply_external_reply_core(self, raw_text: str, source_label: str = "千问/WorkBuddy 智能体融合") -> str:
+        try:
+            text = (raw_text or "").strip() or (QApplication.clipboard().text() or "").strip()
+            ws = parse_external_assistant_reply(
+                text,
+                self._ai_ws.questions,
+                self._ai_ws.notes,
+                title=self._ai_ws.title or "AI 考点智能融合",
+                source_label=source_label,
+            )
+            self._ai_ws = ws
+            self._emit_ai_ws()
+            return json.dumps(
+                {
+                    "ok": True,
+                    "message": f"完成导入「{source_label}」整理结果：共 {len(ws.topics)} 个考点 / {len(ws.questions)} 题",
+                },
+                ensure_ascii=False,
+            )
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def applyExternalAiReply(self, raw_text: str) -> str:
+        return self._apply_external_reply_core(raw_text)
+
     @Slot(str)
     def openLocalPath(self, path: str):
         p = Path(path)
@@ -1706,14 +2154,14 @@ class MainWindow(QMainWindow):
         # 主线程初始化内置 QtWebEngine PDF 打印桥（供内置/兜底模式使用）
         init_qt_pdf_bridge(self)
 
-        self._view = QWebEngineView(self)
+        self._bridge = DesktopBridge(self)
+        self._view = _AtelierWebView(self, self._bridge)
         self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         settings = self._view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
         self._channel = QWebChannel(self._view.page())
-        self._bridge = DesktopBridge(self)
         self._channel.registerObject("cctrBridge", self._bridge)
         self._view.page().setWebChannel(self._channel)
 

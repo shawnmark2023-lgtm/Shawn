@@ -6,16 +6,11 @@ if (-not (Test-Path $csc)) {
     throw "未找到 .NET Framework x64 编译器: $csc"
 }
 
-$distExe = Join-Path $root "dist\CCTRCloudExportDesktop.exe"
-$outExe = Join-Path $root "成品\CCTRCloudExportDesktop.exe"
-if ((Test-Path $distExe) -and ((-not (Test-Path $outExe)) -or ((Get-Item $distExe).LastWriteTime -ge (Get-Item $outExe).LastWriteTime))) {
-    $desktopExe = $distExe
-} elseif (Test-Path $outExe) {
-    $desktopExe = $outExe
-} else {
-    throw "请先构建 CCTRCloudExportDesktop.exe"
+$onedirDir = Join-Path $root "dist\CCTRCloudExport_onedir"
+if (-not (Test-Path (Join-Path $onedirDir "CCTRCloudExportDesktop.exe"))) {
+    throw "请先以 CCTR_BUILD_MODE=onedir 构建 dist\CCTRCloudExport_onedir"
 }
-Write-Host "使用桌面端二进制打包安装包: $desktopExe"
+Write-Host "使用精简高速目录版载荷打包安装包: $onedirDir"
 
 $stage = Join-Path $root "build\installer_stage"
 if (Test-Path $stage) {
@@ -33,26 +28,31 @@ Write-Host "=== 1/3 编译轻量独立卸载程序 Uninstall.exe ==="
     $uninstallCs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "=== 2/3 压缩内嵌完整桌面端与卸载器载荷 ==="
-$appGz = Join-Path $stage "app.gz"
+Write-Host "=== 2/3 使用 LZMA (tar.xz) 高比压缩桌面端目录与卸载器载荷 ==="
+$appTarXz = Join-Path $stage "app.tar.xz"
 $uninstallGz = Join-Path $stage "uninstall.gz"
 
 & (Join-Path $root ".venv\Scripts\python.exe") -c @"
-import gzip, shutil, pathlib
-def gz_copy(src, dst):
-    with open(src, 'rb') as fi, gzip.open(dst, 'wb', compresslevel=6) as fo:
-        shutil.copyfileobj(fi, fo, length=1024*1024)
-gz_copy(r'$desktopExe', r'$appGz')
-gz_copy(r'$uninstallExe', r'$uninstallGz')
-print('app.gz MB:', round(pathlib.Path(r'$appGz').stat().st_size / 1048576, 1))
+import gzip, pathlib, shutil, tarfile
+
+src_dir = pathlib.Path(r'$onedirDir')
+with tarfile.open(r'$appTarXz', 'w:xz', preset=6) as tf:
+    for item in sorted(src_dir.rglob('*')):
+        rel = item.relative_to(src_dir).as_posix()
+        tf.add(str(item), arcname=rel, recursive=False)
+
+with open(r'$uninstallExe', 'rb') as fi, gzip.open(r'$uninstallGz', 'wb', compresslevel=9) as fo:
+    shutil.copyfileobj(fi, fo, length=1024*1024)
+
+print('app.tar.xz MB:', round(pathlib.Path(r'$appTarXz').stat().st_size / 1048576, 1))
 "@
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-Write-Host "=== 3/3 编译一键安装包 CCTRCloudExportSetup.exe ==="
+Write-Host "=== 3/3 编译轻量高速一键安装包 CCTRCloudExportSetup.exe ==="
 $setupOut = Join-Path $root "成品\CCTRCloudExportSetup.exe"
 & $csc /nologo /codepage:65001 /optimize+ /platform:x64 /target:winexe /out:$setupOut `
     /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /reference:Microsoft.CSharp.dll `
-    "/resource:$appGz,app.gz" "/resource:$uninstallGz,uninstall.gz" `
+    "/resource:$appTarXz,app.tar.xz" "/resource:$uninstallGz,uninstall.gz" `
     $setupCs
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

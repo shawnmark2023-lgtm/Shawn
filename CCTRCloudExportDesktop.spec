@@ -1,6 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
+
+_BUILD_MODE = os.environ.get('CCTR_BUILD_MODE', 'onefile').strip().lower()
 
 datas = [('cctr_export/ui/web', 'cctr_export/ui/web')]
 binaries = []
@@ -63,6 +66,7 @@ a = Analysis(
         'tkinter',
         'unittest',
         'pikepdf',
+        'cv2',
         'PySide6.Qt3DAnimation',
         'PySide6.Qt3DCore',
         'PySide6.Qt3DExtras',
@@ -84,8 +88,48 @@ a = Analysis(
     optimize=0,
 )
 
-# 过滤宿主机 mise/Java/Anaconda 混入的 ucrtbase / api-ms-win-* / 旧版 CRT DLL
+# 过滤宿主机 mise/Java/Anaconda 混入的 ucrtbase / api-ms-win-* / 旧版 CRT DLL，
+# 并裁剪经过实测未使用的体积大头（仅保留运行所需的最小完整环境闭环）
 _managed_runtime_lower = set(_runtime_dll_names) | {'d3dcompiler_47.dll'}
+_required_qt6_dlls = {
+    'qt6core.dll', 'qt6gui.dll', 'qt6network.dll', 'qt6opengl.dll',
+    'qt6positioning.dll', 'qt6printsupport.dll', 'qt6qml.dll',
+    'qt6qmlmeta.dll', 'qt6qmlmodels.dll', 'qt6qmlworkerscript.dll',
+    'qt6quick.dll', 'qt6quickwidgets.dll', 'qt6svg.dll',
+    'qt6webchannel.dll', 'qt6webenginecore.dll', 'qt6webenginewidgets.dll',
+    'qt6widgets.dll',
+}
+
+
+def _should_drop_bundle_entry(dest_norm: str, src_norm: str) -> bool:
+    base = Path(dest_norm).name
+    # 1. 排除未使用的 ddddocr 模型（DdddOcr 默认只加载 common_old.onnx + charsets.json）
+    if base in ('common.onnx', 'common_det.onnx'):
+        return True
+    # 2. 排除 PIL avif 编解码大二进制（板书/题图仅用 PNG/JPEG/WEBP/BMP）
+    if base.startswith('_avif.') and ('pil/' in dest_norm or '/pil/' in src_norm):
+        return True
+    # 3. 排除 QtWebEngine 调试/开发者资源包与软光栅超大备份（保留系统 D3D / GPU）
+    if base in (
+        'qtwebengine_devtools_resources.debug.pak',
+        'qtwebengine_resources.debug.pak',
+        'qtwebengine_devtools_resources.pak',
+        'opengl32sw.dll',
+    ):
+        return True
+    # 4. 仅保留 QtWidgets + QWebEngineView 所需的精确 Qt6*.dll 闭环，移除 Quick3D / Pdf / ShaderTools / Controls2
+    if base.startswith('qt6') and base.endswith('.dll') and base not in _required_qt6_dlls:
+        return True
+    # 5. 移除 QML 运行库与非中英文翻译文件
+    if dest_norm.startswith('pyside6/qml/') or '/pyside6/qml/' in src_norm:
+        return True
+    if 'qtwebengine_locales/' in dest_norm and base not in ('zh-cn.pak', 'en-us.pak'):
+        return True
+    if dest_norm.startswith('pyside6/translations/') and base.endswith('.qm') and ('zh_cn' not in base and 'en' not in base):
+        return True
+    return False
+
+
 _filtered_binaries = []
 _seen_dests = set()
 for _dest, _src, _typecode in a.binaries:
@@ -98,6 +142,8 @@ for _dest, _src, _typecode in a.binaries:
         continue
     if any(bad in _src_norm for bad in ('/mise/installs/java', '/jdk', '/jre', '/anaconda', '/miniconda')):
         continue
+    if _should_drop_bundle_entry(_dest_norm, _src_norm):
+        continue
     # 根目录及 onnxruntime/capi 的 VC++ 运行时仅保留 PySide6 同一套一致版本
     if _base in _managed_runtime_lower and ('/' not in _dest_norm or _dest_norm.startswith('onnxruntime/capi/')):
         if '/pyside6/' not in _src_norm and _base != 'd3dcompiler_47.dll':
@@ -108,26 +154,60 @@ for _dest, _src, _typecode in a.binaries:
     _filtered_binaries.append((_dest, _src, _typecode))
 
 a.binaries = _filtered_binaries
+a.datas = [
+    (_dest, _src, _typecode)
+    for (_dest, _src, _typecode) in a.datas
+    if not _should_drop_bundle_entry(str(_dest).replace('\\', '/').lower(), str(_src).replace('\\', '/').lower())
+]
 
 pyz = PYZ(a.pure)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    a.binaries,
-    a.datas,
-    [],
-    name='CCTRCloudExportDesktop',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=False,
-    upx_exclude=[],
-    runtime_tmpdir=None,
-    console=False,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-)
+if _BUILD_MODE == 'onedir':
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='CCTRCloudExportDesktop',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.datas,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        name='CCTRCloudExport_onedir',
+    )
+else:
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.datas,
+        [],
+        name='CCTRCloudExportDesktop',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=False,
+        upx_exclude=[],
+        runtime_tmpdir=None,
+        console=False,
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+    )

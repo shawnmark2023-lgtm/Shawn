@@ -111,6 +111,18 @@ def _run_self_check(out_file: str = "") -> int:
     init_db()
     export_dir = get_export_dir()
     ocr_ok = is_ocr_available()
+    assert ocr_ok, "ddddocr OCR 不可用"
+    # 实机验证精简版 ddddocr + common_old.onnx + PIL + ONNXRuntime 推理链路
+    import io
+    from PIL import ImageDraw
+    from cctr_export.core.captcha_ocr import recognize_captcha
+
+    buf = io.BytesIO()
+    im = Image.new("RGB", (120, 40), (255, 255, 255))
+    ImageDraw.Draw(im).text((15, 12), "8492", fill=(0, 0, 0))
+    im.save(buf, format="PNG")
+    assert recognize_captcha(buf.getvalue()), "OCR 模型推理返回空"
+
     sanitized = sanitize_rich_html("<table><tabody><tr><td>OK</td></tr></tabody></table>")
     assert "<tbody>" in sanitized
     assert certifi.where() and pypdf.__version__ and PROVIDER_PRESETS

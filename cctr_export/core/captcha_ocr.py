@@ -3,7 +3,9 @@ from __future__ import annotations
 
 import io
 import re
+import sys
 import threading
+import types
 from typing import Optional
 
 _ocr_lock = threading.Lock()
@@ -11,6 +13,18 @@ _infer_lock = threading.Lock()
 _ocr_instance = None
 _ocr_import_checked = False
 _ocr_available_flag = False
+
+
+def _import_ddddocr():
+    """在精简打包（不含 cv2）环境下注入轻量占位模块，确保仅依赖 PIL + onnxruntime 的 OCR 正常工作。"""
+    if "cv2" not in sys.modules:
+        try:
+            import cv2  # noqa: F401
+        except ImportError:
+            sys.modules["cv2"] = types.ModuleType("cv2")
+    import ddddocr
+
+    return ddddocr
 
 
 def is_ocr_available() -> bool:
@@ -21,7 +35,7 @@ def is_ocr_available() -> bool:
     with _ocr_lock:
         if not _ocr_import_checked:
             try:
-                import ddddocr  # noqa: F401
+                _import_ddddocr()
                 _ocr_available_flag = True
             except Exception:
                 _ocr_available_flag = False
@@ -33,7 +47,7 @@ def _get_ocr():
     global _ocr_instance
     with _ocr_lock:
         if _ocr_instance is None:
-            import ddddocr
+            ddddocr = _import_ddddocr()
             try:
                 _ocr_instance = ddddocr.DdddOcr(show_ad=False)
             except TypeError:
