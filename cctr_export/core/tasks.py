@@ -223,6 +223,18 @@ class TaskEngine:
                     f"✓ 合并 A4 PDF 完成（智能防隔页={'开启' if smart_pagination else '关闭'} · 统一字号与公式比例）: {pdf_path}",
                 )
 
+            try:
+                snap_dir = Path.home() / ".cctr_export" / "task_questions"
+                snap_dir.mkdir(parents=True, exist_ok=True)
+                export_questions_to_json(
+                    all_questions,
+                    snap_dir / f"{task_id}.json",
+                    variant="withAnswersRed",
+                    title=scope_label,
+                )
+            except Exception:
+                pass
+
             update_task_status(task_id, TaskStatus.SUCCESS)
             add_log(task_id, LogLevel.INFO, "任务完成")
         except Exception as e:

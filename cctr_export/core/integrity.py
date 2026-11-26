@@ -147,7 +147,7 @@ VERIFY_AND_SLICE_JS = r"""
 
     const src = image.getAttribute('src') || '';
     const isSvgData = /^data:image\/svg\+xml/i.test(src);
-    const host = image.closest('article, .option-body, .content') || document.body;
+    const host = image.closest('article, .option-body, .content, .board-fig') || document.body;
     const availW = Math.max(220, Math.floor((host.getBoundingClientRect().width || document.body.getBoundingClientRect().width || 640) - 2));
     const natW = image.naturalWidth;
     const natH = image.naturalHeight;

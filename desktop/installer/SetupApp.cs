@@ -13,7 +13,7 @@ namespace CCTRCloudSetup
     internal static class SetupProgram
     {
         private const string AppDisplayName = "融智云考 · 印务台";
-        private const string AppVersion = "4.2.0";
+        private const string AppVersion = "5.0.0";
         private const string UninstallRegPath = @"Software\Microsoft\Windows\CurrentVersion\Uninstall\CCTRCloudExport";
 
         [STAThread]

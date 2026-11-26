@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import uuid
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QFile, QIODevice, QObject, QSize, QThread, QTimer, QUrl, Qt, Signal, Slot
@@ -42,7 +43,31 @@ from ..core.database import (
     update_task_status,
 )
 from ..core.exporter import init_qt_pdf_bridge
-from ..core.formats import get_local_bank_filters, import_questions_from_file, save_local_bank
+from ..core.formats import (
+    get_local_bank_filters,
+    html_to_plain_text,
+    import_questions_from_file,
+    load_local_bank_questions,
+    save_local_bank,
+)
+from ..plugins import list_registered_plugins
+from ..plugins.ai_knowledge import (
+    PROVIDER_PRESETS,
+    KnowledgeTopic,
+    KnowledgeWorkspace,
+    ModelProfile,
+    MultimodalModelClient,
+    NoteItem,
+    ai_classify_and_fuse,
+    analyze_note_item,
+    export_knowledge_bundle,
+    import_note_file,
+    load_ai_config,
+    load_questions_from_task_snapshot,
+    load_workspace_from_json,
+    offline_classify_and_fuse,
+    save_ai_config,
+)
 from ..core.kernels import (
     KERNEL_LABELS,
     cleanup_empty_legacy_output_dirs,
@@ -795,6 +820,143 @@ class _KernelWorker(QThread):
             self.done.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
 
 
+class _AiProbeWorker(QThread):
+    done = Signal(str)
+
+    def __init__(self, base_url: str):
+        super().__init__()
+        self._base_url = base_url
+
+    def run(self):
+        try:
+            models = MultimodalModelClient.probe_ollama_models(self._base_url)
+            self.done.emit(json.dumps({"ok": True, "models": models}, ensure_ascii=False))
+        except Exception as e:
+            self.done.emit(json.dumps({"ok": False, "error": str(e), "models": []}, ensure_ascii=False))
+
+
+class _AiTestWorker(QThread):
+    done = Signal(str)
+
+    def __init__(self, profile: ModelProfile):
+        super().__init__()
+        self._profile = profile
+
+    def run(self):
+        try:
+            reply = MultimodalModelClient(self._profile).chat("请只回复：连接正常", timeout=25.0)
+            self.done.emit(json.dumps({"ok": True, "reply": reply[:120]}, ensure_ascii=False))
+        except Exception as e:
+            self.done.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+
+
+class _AiLoadPracticesWorker(QThread):
+    done = Signal(str, list, str)
+
+    def __init__(self, client: CCTRClient | None, practices_json: list[str]):
+        super().__init__()
+        self._client = client
+        self._practices_json = practices_json
+
+    def run(self):
+        try:
+            all_qs = []
+            titles = []
+            for pj in self._practices_json:
+                p = Practice.from_json(pj)
+                titles.append(p.lesson_name or p.practice_name)
+                if p.courseid == "__local_bank__":
+                    all_qs.extend(load_local_bank_questions(p.practise_id))
+                else:
+                    if self._client is None or not self._client.key:
+                        raise RuntimeError("融智云考会话已失效，请先登录或使用已完成导出任务快照")
+                    all_qs.extend(self._client.query_questions(p))
+            title = f"{titles[0]} 等{len(titles)}项" if len(titles) > 1 else (titles[0] if titles else "工作台题库")
+            self.done.emit(title, all_qs, "")
+        except Exception as e:
+            self.done.emit("", [], str(e))
+
+
+class _AiNoteAnalyzeWorker(QThread):
+    done = Signal(str, object, str)
+
+    def __init__(self, note: NoteItem, profile: ModelProfile):
+        super().__init__()
+        self._note = note
+        self._profile = profile
+
+    def run(self):
+        try:
+            updated = analyze_note_item(self._note, MultimodalModelClient(self._profile))
+            self.done.emit(updated.id, updated, "")
+        except Exception as e:
+            self.done.emit(self._note.id, None, str(e))
+
+
+class _AiFusionWorker(QThread):
+    progress = Signal(int, str)
+    done = Signal(object, str)
+
+    def __init__(self, questions: list, notes: list[NoteItem], profile: ModelProfile, mode: str, title: str):
+        super().__init__()
+        self._questions = list(questions)
+        self._notes = list(notes)
+        self._profile = profile
+        self._mode = mode
+        self._title = title
+
+    def run(self):
+        try:
+            if self._mode == "offline":
+                self.progress.emit(50, "正在按章节与课堂笔记关键词离线智能聚类…")
+                ws = offline_classify_and_fuse(self._questions, self._notes, title=self._title)
+                self.progress.emit(100, "离线考点分类完成")
+            else:
+                ws = ai_classify_and_fuse(
+                    self._questions,
+                    self._notes,
+                    self._profile,
+                    title=self._title,
+                    progress_cb=lambda pct, msg: self.progress.emit(pct, msg),
+                )
+            self.done.emit(ws, "")
+        except Exception as e:
+            self.done.emit(None, str(e))
+
+
+class _AiExportWorker(QThread):
+    done = Signal(str)
+
+    def __init__(self, workspace: KnowledgeWorkspace, opts: dict):
+        super().__init__()
+        self._ws = workspace
+        self._opts = opts
+
+    def run(self):
+        try:
+            paths = export_knowledge_bundle(
+                self._ws,
+                outputs=list(self._opts.get("outputs") or ["fused_pdf"]),
+                variant=str(self._opts.get("variant") or "withAnswersRed"),
+                smart_pagination=bool(self._opts.get("smartPagination", True)),
+                include_notes=bool(self._opts.get("includeNotes", True)),
+                include_questions=bool(self._opts.get("includeQuestions", True)),
+                include_note_images=bool(self._opts.get("includeNoteImages", True)),
+            )
+            self.done.emit(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "paths": paths,
+                        "files": [{"path": p, "name": Path(p).name} for p in paths],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        except Exception as e:
+            self.done.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+
+
 class DesktopBridge(QObject):
     captchaReady = Signal(str)
     loginDone = Signal(str)
@@ -804,12 +966,19 @@ class DesktopBridge(QObject):
     kernelProgress = Signal(int, str)
     kernelDone = Signal(str)
     windowStateChanged = Signal(bool)
+    aiStateUpdated = Signal(str)
+    aiProbeDone = Signal(str)
+    aiTestDone = Signal(str)
+    aiProgress = Signal(int, str)
+    aiFusionDone = Signal(str)
+    aiExportDone = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._client: CCTRClient | None = None
         self._workers: list[QThread] = []
         self._last_state_json = ""
+        self._ai_ws = KnowledgeWorkspace()
         try:
             cleanup_empty_legacy_output_dirs()
         except Exception:
@@ -889,6 +1058,7 @@ class DesktopBridge(QObject):
                     "file_name": art.name if art else "",
                     "file_size": _fmt_size(art),
                     "question_count": total_q,
+                    "has_snapshot": (Path.home() / ".cctr_export" / "task_questions" / f"{t.id}.json").exists(),
                 }
             )
         return {"tasks": task_list, "logs": logs}
@@ -902,6 +1072,10 @@ class DesktopBridge(QObject):
             "exportDir": str(get_export_dir()),
             "savedAccounts": get_saved_accounts(),
             "kernels": self._kernels_payload(),
+            "plugins": list_registered_plugins(),
+            "aiConfig": load_ai_config().to_dict(),
+            "aiPresets": [{"key": k, **v} for k, v in PROVIDER_PRESETS.items()],
+            "aiWorkspace": self._ai_ws_payload(),
             **self._tasks_and_logs_payload(),
         }
         self._last_state_json = json.dumps(self._tasks_and_logs_payload(), ensure_ascii=False)
@@ -1160,6 +1334,303 @@ class DesktopBridge(QObject):
     @Slot(bool)
     def setDarkMode(self, dark: bool):
         save_settings({"dark_mode": bool(dark)})
+
+    # ── v5 AI 多模态考点融合插件桥接方法 ───────────────────────────────────
+
+    def _ai_ws_payload(self) -> dict:
+        ws = self._ai_ws
+        q_briefs = [
+            {
+                "id": q.id,
+                "question_type": q.question_type,
+                "chapter_name": q.chapter_name,
+                "subject_name": q.subject_name,
+                "stem_preview": html_to_plain_text(q.subject_html)[:180],
+                "answer_preview": html_to_plain_text(q.answer)[:90],
+            }
+            for q in ws.questions
+        ]
+        notes_brief = [
+            {
+                "id": n.id,
+                "title": n.title,
+                "source_type": n.source_type,
+                "source_path": n.source_path,
+                "raw_preview": (n.raw_text or "")[:240],
+                "image_data_uri": n.image_data_uri,
+                "ocr_summary": n.ocr_summary,
+                "key_points": n.key_points,
+                "formulas": n.formulas,
+                "suggested_topic": n.suggested_topic,
+            }
+            for n in ws.notes
+        ]
+        return {
+            "title": ws.title,
+            "source_label": ws.source_label,
+            "questionCount": len(ws.questions),
+            "questions": q_briefs,
+            "notes": notes_brief,
+            "topics": [t.to_dict() for t in ws.topics],
+        }
+
+    def _emit_ai_ws(self):
+        self.aiStateUpdated.emit(json.dumps(self._ai_ws_payload(), ensure_ascii=False))
+
+    @Slot(str, result=str)
+    def saveAiPluginConfig(self, cfg_json: str) -> str:
+        try:
+            prof = save_ai_config(ModelProfile.from_dict(json.loads(cfg_json)))
+            return json.dumps({"ok": True, "config": prof.to_dict()}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(str)
+    def probeOllamaModels(self, base_url: str):
+        w = _AiProbeWorker(base_url)
+        w.done.connect(self.aiProbeDone.emit)
+        self._keep_worker(w)
+
+    @Slot(str)
+    def testAiModel(self, cfg_json: str):
+        try:
+            prof = save_ai_config(ModelProfile.from_dict(json.loads(cfg_json)))
+        except Exception as e:
+            self.aiTestDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return
+        w = _AiTestWorker(prof)
+        w.done.connect(self.aiTestDone.emit)
+        self._keep_worker(w)
+
+    @Slot(int, result=str)
+    def loadAiFromTask(self, task_id: int) -> str:
+        try:
+            title, qs = load_questions_from_task_snapshot(task_id)
+            self._ai_ws.title = title or f"任务 #{task_id}"
+            self._ai_ws.source_label = f"已导出任务 #{task_id}"
+            self._ai_ws.questions = qs
+            self._ai_ws.topics = []
+            self._emit_ai_ws()
+            return json.dumps({"ok": True, "title": self._ai_ws.title, "count": len(qs)}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(str)
+    def loadAiFromPractices(self, practices_json_list: str):
+        try:
+            plist = json.loads(practices_json_list)
+            if not plist:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": "工作台当前尚未勾选练习"}, ensure_ascii=False))
+                return
+        except Exception as e:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return
+        w = _AiLoadPracticesWorker(self._client, plist)
+
+        def on_loaded(title: str, qs: list, err: str):
+            if err or not qs:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": err or "未读取到题目"}, ensure_ascii=False))
+                return
+            self._ai_ws.title = title or "工作台题库"
+            self._ai_ws.source_label = "工作台已选练习"
+            self._ai_ws.questions = qs
+            self._ai_ws.topics = []
+            self._emit_ai_ws()
+            self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": f"已载入「{self._ai_ws.title}」共 {len(qs)} 道题"}, ensure_ascii=False))
+
+        w.done.connect(on_loaded)
+        self._keep_worker(w)
+
+    @Slot()
+    def importAiQuestionFiles(self):
+        QTimer.singleShot(0, self._pick_ai_question_files)
+
+    def _pick_ai_question_files(self):
+        parent_w = self._main_win()
+        files, _ = QFileDialog.getOpenFileNames(
+            parent_w,
+            "导入题库或 v5 知识图谱 JSON",
+            "",
+            "题库与知识图谱 (*.json *.xlsx *.docx *.md *.markdown *.txt *.csv *.tsv);;所有文件 (*.*)",
+        )
+        if not files:
+            return
+        loaded_qs = []
+        titles = []
+        errors = []
+        for fp in files:
+            try:
+                p = Path(fp)
+                if p.suffix.lower() == ".json":
+                    raw = p.read_text(encoding="utf-8-sig")
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict) and "topics" in parsed and "questions" in parsed:
+                        self._ai_ws = load_workspace_from_json(raw)
+                        self._emit_ai_ws()
+                        self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": f"已恢复知识图谱「{self._ai_ws.title}」（{len(self._ai_ws.topics)} 考点 / {len(self._ai_ws.questions)} 题）"}, ensure_ascii=False))
+                        return
+                title, qs = import_questions_from_file(fp)
+                titles.append(title)
+                loaded_qs.extend(qs)
+            except Exception as e:
+                errors.append(f"{Path(fp).name}: {e}")
+        if loaded_qs:
+            self._ai_ws.title = titles[0] if len(titles) == 1 else f"{titles[0]} 等{len(titles)}份"
+            self._ai_ws.source_label = "本地导入题库"
+            self._ai_ws.questions = loaded_qs
+            self._ai_ws.topics = []
+            self._emit_ai_ws()
+            self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": f"已载入 {len(loaded_qs)} 道题目"}, ensure_ascii=False))
+        elif errors:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": errors[0]}, ensure_ascii=False))
+
+    @Slot()
+    def importAiNoteFiles(self):
+        QTimer.singleShot(0, self._pick_ai_note_files)
+
+    def _pick_ai_note_files(self):
+        parent_w = self._main_win()
+        files, _ = QFileDialog.getOpenFileNames(
+            parent_w,
+            "导入课堂笔记、板书拍照或课件讲义",
+            "",
+            "笔记与板书 (*.png *.jpg *.jpeg *.webp *.bmp *.pdf *.pptx *.docx *.md *.markdown *.txt);;所有文件 (*.*)",
+        )
+        if not files:
+            return
+        added = 0
+        errors = []
+        for fp in files:
+            try:
+                note = import_note_file(fp)
+                self._ai_ws.notes.append(note)
+                added += 1
+            except Exception as e:
+                errors.append(f"{Path(fp).name}: {e}")
+        self._emit_ai_ws()
+        if added:
+            self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": f"已导入 {added} 份课堂笔记/板书"}, ensure_ascii=False))
+        elif errors:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": errors[0]}, ensure_ascii=False))
+
+    @Slot(str, str, result=str)
+    def addAiManualNote(self, title: str, text: str) -> str:
+        t = (title or "").strip() or f"手动笔记 {len(self._ai_ws.notes) + 1}"
+        body = (text or "").strip()
+        if not body:
+            return json.dumps({"ok": False, "error": "笔记内容不能为空"}, ensure_ascii=False)
+        self._ai_ws.notes.append(NoteItem(id=f"note_{uuid.uuid4().hex[:8]}", title=t, source_type="txt", raw_text=body))
+        self._emit_ai_ws()
+        return json.dumps({"ok": True}, ensure_ascii=False)
+
+    @Slot(str, result=str)
+    def removeAiNote(self, note_id: str) -> str:
+        self._ai_ws.notes = [n for n in self._ai_ws.notes if n.id != note_id]
+        for tp in self._ai_ws.topics:
+            tp.note_ids = [nid for nid in tp.note_ids if nid != note_id]
+        self._emit_ai_ws()
+        return json.dumps({"ok": True}, ensure_ascii=False)
+
+    @Slot(str, str)
+    def analyzeSingleAiNote(self, note_id: str, cfg_json: str):
+        note = next((n for n in self._ai_ws.notes if n.id == note_id), None)
+        if not note:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": "未找到该条课堂笔记"}, ensure_ascii=False))
+            return
+        prof = save_ai_config(ModelProfile.from_dict(json.loads(cfg_json)))
+        w = _AiNoteAnalyzeWorker(note, prof)
+
+        def on_done(nid: str, updated, err: str):
+            if err or updated is None:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": err or "解析失败"}, ensure_ascii=False))
+                return
+            self._ai_ws.notes = [updated if n.id == nid else n for n in self._ai_ws.notes]
+            self._emit_ai_ws()
+            self.aiFusionDone.emit(json.dumps({"ok": True, "loadedOnly": True, "message": f"已完成笔记「{updated.title}」的多模态识别"}, ensure_ascii=False))
+
+        w.done.connect(on_done)
+        self._keep_worker(w)
+
+    @Slot(str)
+    def runAiFusion(self, payload_json: str):
+        try:
+            body = json.loads(payload_json)
+            if not self._ai_ws.questions:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": "请先导入或从归档/工作台载入一套题库"}, ensure_ascii=False))
+                return
+            mode = str(body.get("mode") or "ai")
+            title = str(body.get("title") or self._ai_ws.title or "考点智能融合").strip()
+            prof = save_ai_config(ModelProfile.from_dict(body.get("profile") or {}))
+        except Exception as e:
+            self.aiFusionDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return
+
+        w = _AiFusionWorker(self._ai_ws.questions, self._ai_ws.notes, prof, mode, title)
+        w.progress.connect(self.aiProgress.emit)
+
+        def on_done(ws, err: str):
+            if err or ws is None:
+                self.aiFusionDone.emit(json.dumps({"ok": False, "error": err or "分类融合失败"}, ensure_ascii=False))
+                return
+            self._ai_ws = ws
+            self._emit_ai_ws()
+            self.aiFusionDone.emit(
+                json.dumps(
+                    {
+                        "ok": True,
+                        "message": f"完成按考点分类：共 {len(ws.topics)} 个考点 / {len(ws.questions)} 题 / {len(ws.notes)} 份笔记",
+                    },
+                    ensure_ascii=False,
+                )
+            )
+
+        w.done.connect(on_done)
+        self._keep_worker(w)
+
+    @Slot(str, result=str)
+    def syncAiTopics(self, payload_json: str) -> str:
+        try:
+            data = json.loads(payload_json)
+            if "title" in data and str(data["title"]).strip():
+                self._ai_ws.title = str(data["title"]).strip()
+            if isinstance(data.get("topics"), list):
+                self._ai_ws.topics = [KnowledgeTopic.from_dict(t) for t in data["topics"]]
+            self._emit_ai_ws()
+            return json.dumps({"ok": True}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot(str)
+    def exportAiBundle(self, payload_json: str):
+        try:
+            body = json.loads(payload_json)
+            if isinstance(body.get("topics"), list):
+                self._ai_ws.topics = [KnowledgeTopic.from_dict(t) for t in body["topics"]]
+            if body.get("title"):
+                self._ai_ws.title = str(body["title"]).strip()
+        except Exception as e:
+            self.aiExportDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
+            return
+        w = _AiExportWorker(self._ai_ws, body)
+        w.done.connect(self.aiExportDone.emit)
+        self._keep_worker(w)
+
+    @Slot(str)
+    def openLocalPath(self, path: str):
+        p = Path(path)
+        if p.exists():
+            self._open_local(p)
+
+    @Slot(str)
+    def revealLocalPath(self, path: str):
+        p = Path(path)
+        if p.exists():
+            if os.name == "nt":
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            else:
+                self._open_local(p.parent)
+        else:
+            self.openExportDir()
 
     def _main_win(self) -> QMainWindow | None:
         p = self.parent()

@@ -4,7 +4,15 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [('cctr_export/ui/web', 'cctr_export/ui/web')]
 binaries = []
-hiddenimports = ['socksio', 'certifi', 'sqlite3', 'ctypes.wintypes']
+hiddenimports = [
+    'socksio',
+    'certifi',
+    'sqlite3',
+    'ctypes.wintypes',
+    'pypdf',
+    'cctr_export.plugins',
+    'cctr_export.plugins.ai_knowledge',
+]
 
 for pkg in ('ddddocr', 'onnxruntime', 'socksio', 'certifi'):
     tmp_datas, tmp_bins, tmp_hidden = collect_all(pkg)
@@ -54,7 +62,6 @@ a = Analysis(
     excludes=[
         'tkinter',
         'unittest',
-        'pypdf',
         'pikepdf',
         'PySide6.Qt3DAnimation',
         'PySide6.Qt3DCore',

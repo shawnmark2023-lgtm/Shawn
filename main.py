@@ -96,6 +96,7 @@ def _run_self_check(out_file: str = "") -> int:
     """运行环境自检：校验独立运行时 DLL、OCR 模型、网络组件与导出目录是否就绪。"""
     import certifi
     import onnxruntime
+    import pypdf
     import socksio
     from Crypto.Cipher import AES
     from PIL import Image
@@ -105,13 +106,14 @@ def _run_self_check(out_file: str = "") -> int:
     from cctr_export.core.database import init_db
     from cctr_export.core.integrity import sanitize_rich_html
     from cctr_export.core.kernels import get_export_dir
+    from cctr_export.plugins.ai_knowledge import PROVIDER_PRESETS
 
     init_db()
     export_dir = get_export_dir()
     ocr_ok = is_ocr_available()
     sanitized = sanitize_rich_html("<table><tabody><tr><td>OK</td></tr></tabody></table>")
     assert "<tbody>" in sanitized
-    assert certifi.where()
+    assert certifi.where() and pypdf.__version__ and PROVIDER_PRESETS
     assert AES and Image and onnxruntime and socksio
     QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     summary = (
