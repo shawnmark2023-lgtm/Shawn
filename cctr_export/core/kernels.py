@@ -7,6 +7,7 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -33,6 +34,7 @@ def _resolve_default_export_dir() -> Path:
 SETTINGS_FILE = Path.home() / ".cctr_export" / "settings.json"
 RUNTIMES_DIR = Path.home() / ".cctr_export" / "runtimes"
 DEFAULT_EXPORT_DIR = _resolve_default_export_dir()
+_SETTINGS_LOCK = threading.Lock()
 
 KERNEL_LABELS: list[tuple[str, str]] = [
     ("auto", "自动优选（自动检测本地 / 内置内核）"),
@@ -54,7 +56,7 @@ class KernelInfo:
     can_download: bool = False
 
 
-def load_settings() -> dict:
+def _read_settings_unlocked() -> dict:
     try:
         if SETTINGS_FILE.exists():
             data = json.loads(SETTINGS_FILE.read_text(encoding="utf-8"))
@@ -65,12 +67,28 @@ def load_settings() -> dict:
     return {}
 
 
+def load_settings() -> dict:
+    with _SETTINGS_LOCK:
+        return _read_settings_unlocked()
+
+
 def save_settings(updates: dict) -> dict:
-    SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
-    data = load_settings()
-    data.update(updates)
-    SETTINGS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-    return data
+    with _SETTINGS_LOCK:
+        SETTINGS_FILE.parent.mkdir(parents=True, exist_ok=True)
+        data = _read_settings_unlocked()
+        data.update(updates)
+        fd, tmp_name = tempfile.mkstemp(prefix=".settings_", suffix=".tmp", dir=str(SETTINGS_FILE.parent))
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps(data, ensure_ascii=False, indent=2))
+            os.replace(tmp_name, SETTINGS_FILE)
+        except Exception:
+            try:
+                Path(tmp_name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            raise
+        return data
 
 
 def get_preferred_kernel() -> str:

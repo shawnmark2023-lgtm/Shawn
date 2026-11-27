@@ -39,6 +39,7 @@ class TaskEngine:
 
     def __init__(self):
         self._progress_callbacks: dict[int, Callable[[int, int], None]] = {}
+        self._active_tasks: dict[int, threading.Thread] = {}
         self._lock = threading.Lock()
 
     def set_progress_callback(self, task_id: int, cb: Callable[[int, int], None]):
@@ -59,8 +60,15 @@ class TaskEngine:
                 pass
 
     def run_task(self, task_id: int):
-        t = threading.Thread(target=self._run, args=(task_id,), daemon=True)
-        t.start()
+        with self._lock:
+            for tid in [k for k, th in self._active_tasks.items() if not th.is_alive()]:
+                self._active_tasks.pop(tid, None)
+            existing = self._active_tasks.get(task_id)
+            if existing is not None and existing.is_alive():
+                return
+            t = threading.Thread(target=self._run, args=(task_id,), daemon=True)
+            self._active_tasks[task_id] = t
+            t.start()
 
     def _run(self, task_id: int):
         task = get_task(task_id)
@@ -241,11 +249,16 @@ class TaskEngine:
             update_task_status(task_id, TaskStatus.FAILED)
             add_log(task_id, LogLevel.ERROR, f"任务失败: {e}")
         finally:
+            with self._lock:
+                self._active_tasks.pop(task_id, None)
             if client:
                 client.close()
 
     def shutdown(self):
-        pass
+        with self._lock:
+            threads = [th for th in self._active_tasks.values() if th.is_alive()]
+        for th in threads:
+            th.join(timeout=1.0)
 
 
 engine = TaskEngine()

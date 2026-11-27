@@ -147,7 +147,7 @@ class CCTRClient:
                 split_counts = [len([x for x in str(s).split(",") if x.strip()]) for s in split if str(s).strip()]
                 if split_counts:
                     expected_bucket_count = sum(split_counts)
-                if len(split) > 1 and expected_bucket_count and len(first_raw) < expected_bucket_count and len(split) < 2:
+                if len(split) == 1 and expected_bucket_count and len(first_raw) < expected_bucket_count:
                     raise RuntimeError(f"平台未提供完整分页游标（{len(first_raw)}/{expected_bucket_count}），无法确认题目完整")
             elif len(practice_types) == 1 and reported_count is not None and len(first_raw) < reported_count:
                 raise RuntimeError(f"平台未提供完整分页游标（{len(first_raw)}/{reported_count}），无法确认题目完整")

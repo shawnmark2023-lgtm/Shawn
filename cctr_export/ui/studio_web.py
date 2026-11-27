@@ -60,6 +60,7 @@ from ..plugins.ai_knowledge import (
     ModelProfile,
     MultimodalModelClient,
     NoteItem,
+    _expand_dropped_paths,
     ai_classify_and_fuse,
     analyze_note_item,
     build_workbench_handoff_pack,
@@ -341,6 +342,7 @@ class _FilterWorker(QThread):
         super().__init__()
         self._client = client
         self._practice = practice
+        self._practice_id = str(practice.id)
 
     def run(self):
         try:
@@ -354,6 +356,7 @@ class _FilterWorker(QThread):
                 json.dumps(
                     {
                         "ok": True,
+                        "practiceId": self._practice_id,
                         "chapters": [c.to_dict() for c in chapters],
                         "question_types": [q.to_dict() for q in qtypes],
                     },
@@ -361,7 +364,7 @@ class _FilterWorker(QThread):
                 )
             )
         except Exception as e:
-            self.done.emit(json.dumps({"ok": False, "chapters": [], "question_types": [], "error": str(e)}, ensure_ascii=False))
+            self.done.emit(json.dumps({"ok": False, "practiceId": self._practice_id, "chapters": [], "question_types": [], "error": str(e)}, ensure_ascii=False))
 
 
 class _ImportFilesWorker(QThread):
@@ -794,6 +797,7 @@ class PlatformBrowserDialog(QDialog):
         self._web.setPage(None)
         self._page.deleteLater()
         self._profile.deleteLater()
+        self._apply_proxy_mode(direct=True)
 
     def done(self, r: int) -> None:
         self._cleanup_browser()
@@ -819,16 +823,19 @@ class _DroppedFilesWorker(QThread):
             if self._zone == "workspace":
                 practices = []
                 errors = []
-                for fp in self._paths:
+                for fp in _expand_dropped_paths(self._paths):
                     try:
                         title, qs = import_questions_from_file(fp)
-                        practices.append(save_local_bank(title, qs).to_json())
+                        src = f"拖拽导入 ({fp.suffix.lstrip('.').upper()})"
+                        p = save_local_bank(title=title, source_label=src, questions=qs)
+                        practices.append(_practice_payload(p))
                     except Exception as e:
-                        errors.append(f"{Path(fp).name}: {e}")
+                        errors.append(f"{fp.name}: {e}")
                 payload = {
                     "ok": bool(practices),
                     "practices": practices,
                     "sourceLabel": "拖拽导入题库",
+                    "errors": errors,
                     "error": "; ".join(errors),
                 }
                 self.done.emit(self._zone, payload)
@@ -1051,6 +1058,7 @@ class AiWebAssistantDialog(QDialog):
         self._web.setPage(None)
         self._page.deleteLater()
         self._profile.deleteLater()
+        self._apply_proxy_mode(direct=True)
 
     def done(self, r: int) -> None:
         self._cleanup()
@@ -1379,6 +1387,7 @@ class DesktopBridge(QObject):
     def getInitialState(self) -> str:
         settings = load_settings()
         payload = {
+            "version": "5.2.0",
             "ocrAvailable": is_ocr_available(),
             "darkMode": bool(settings.get("dark_mode", False)),
             "exportDir": str(get_export_dir()),
@@ -1538,12 +1547,11 @@ class DesktopBridge(QObject):
             ]
             school_id = self._client.school_id if (self._client and self._client.key) else "multi"
             username = self._client.username if (self._client and self._client.key) else "多平台工作台"
-            password = self._client.password if (self._client and self._client.key) else ""
             auth_key = self._client.key if (self._client and self._client.key) else ""
             task_id = add_task(
                 school_id,
                 username,
-                password,
+                "",
                 fmt,
                 config,
                 auth_key=auth_key,
@@ -1909,10 +1917,37 @@ class DesktopBridge(QObject):
                 self._ai_ws.title = str(data["title"]).strip()
             if isinstance(data.get("topics"), list):
                 self._ai_ws.topics = [KnowledgeTopic.from_dict(t) for t in data["topics"]]
-            self._emit_ai_ws()
-            return json.dumps({"ok": True}, ensure_ascii=False)
+            # 静默更新状态，避免编辑考点文本框时反向触发整卡重绘造成失焦回弹
+            return json.dumps({"ok": True, "topicCount": len(self._ai_ws.topics)}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
+
+    @Slot()
+    def importAiAnyFiles(self):
+        QTimer.singleShot(0, self._pick_ai_any_files)
+
+    def _pick_ai_any_files(self):
+        parent_w = self._main_win()
+        files, _ = QFileDialog.getOpenFileNames(
+            parent_w,
+            "导入题库、课堂笔记、板书拍照或知识图谱",
+            "",
+            "全部支持格式 (*.xlsx *.docx *.pdf *.pptx *.png *.jpg *.jpeg *.webp *.bmp *.md *.markdown *.txt *.json *.csv *.tsv);;所有文件 (*.*)",
+        )
+        if files:
+            self.handleDroppedPaths(files, "auto")
+
+    @Slot(str, result=str)
+    def clearAiWorkspace(self, target: str = "all") -> str:
+        t = (target or "all").strip().lower()
+        if t == "notes":
+            self._ai_ws.notes = []
+        elif t == "topics":
+            self._ai_ws.topics = []
+        else:
+            self._ai_ws = KnowledgeWorkspace()
+        self._emit_ai_ws()
+        return json.dumps({"ok": True}, ensure_ascii=False)
 
     @Slot(str)
     def exportAiBundle(self, payload_json: str):
@@ -2159,6 +2194,7 @@ class MainWindow(QMainWindow):
         self._view.setContextMenuPolicy(Qt.ContextMenuPolicy.NoContextMenu)
         settings = self._view.settings()
         settings.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
+        settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessFileUrls, True)
         settings.setAttribute(QWebEngineSettings.WebAttribute.LocalContentCanAccessRemoteUrls, True)
 
         self._channel = QWebChannel(self._view.page())
