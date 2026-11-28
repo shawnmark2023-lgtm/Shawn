@@ -697,8 +697,26 @@ function renderAiWorkspace() {
     ? `✓ 当前题库：《${ws.title}》（${ws.questionCount} 道完整题目 · 来源：${ws.source_label || '本地'}）`
     : '尚未加载题库：可直接拖入题库文件，或点击上方「一键载入最近导出题库」。';
 
+  const prepBar = qs('aiPreprocessBar');
+  const rep = ws.preprocess_report || {};
+  if (prepBar) {
+    if (rep.ready) {
+      prepBar.style.display = 'flex';
+      if (qs('aiPreprocessSummary')) qs('aiPreprocessSummary').textContent = rep.summary_text || '';
+      const kws = (rep.top_keywords || []).slice(0, 6).map(k => `<span class="ai-prep-chip">高频词 · ${escapeHtml(k)}</span>`);
+      const chaps = (rep.chapter_summary || []).slice(0, 3).map(c => `<span class="ai-prep-chip">${escapeHtml(c.name)} (${c.count}题)</span>`);
+      if (qs('aiPreprocessTags')) qs('aiPreprocessTags').innerHTML = [...chaps, ...kws].join('');
+    } else {
+      prepBar.style.display = 'none';
+    }
+  }
+
   const nBox = qs('aiNotesList');
-  nBox.innerHTML = (ws.notes || []).map((n, idx) => `
+  nBox.innerHTML = (ws.notes || []).map((n, idx) => {
+    const fCnt = (n.formulas || []).length;
+    const kCnt = (n.key_points || []).length;
+    const prepMeta = (fCnt || kCnt) ? `<span style="color:var(--jade);font-weight:600;"> · 提炼 ${fCnt}公式/${kCnt}要点</span>` : '';
+    return `
     <div class="ai-note-item">
       ${n.image_data_uri
         ? `<img class="ai-note-thumb" src="${escapeHtml(n.image_data_uri)}" alt="${escapeHtml(n.title)}">`
@@ -706,15 +724,15 @@ function renderAiWorkspace() {
       <div style="min-width:0;flex:1;">
         <div style="font-weight:600;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(n.title)}</div>
         <div style="font-size:11px;color:var(--ink-2);margin-top:2px;">
-          ${n.ocr_summary ? `<span style="color:var(--jade);font-weight:600;">✓ 已提炼 · ${escapeHtml(n.suggested_topic || '考点')}</span>` : escapeHtml((n.raw_preview || '图片板书').slice(0, 40))}
+          ${n.ocr_summary ? `<span style="color:var(--jade);font-weight:600;">✓ 已提炼 · ${escapeHtml(n.suggested_topic || '考点')}</span>` : escapeHtml((n.raw_preview || '增强清晰版板书').slice(0, 34))}${prepMeta}
         </div>
         <div style="display:flex;gap:8px;margin-top:4px;">
           <button type="button" class="desk-link" style="font-size:11px;" data-action="analyze-note" data-idx="${idx}">识别提炼</button>
           <button type="button" class="desk-link" style="font-size:11px;color:var(--vermilion);" data-action="remove-note" data-idx="${idx}">移除</button>
         </div>
       </div>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
 
   const topics = ws.topics || [];
   qs('aiEmptyTree').style.display = topics.length ? 'none' : 'block';
@@ -851,7 +869,7 @@ function bindGlobalUIEvents() {
     if (wbBtn) {
       if (!Store.aiWorkspace.questionCount) return showToast('请先在第 ① 步导入或载入题库');
       Store.bridge && Store.bridge.openAiWebWorkbench(wbBtn.dataset.workbench || 'qianwen');
-      showToast('已生成整理指令并打开内置助手窗口');
+      showToast('已完成材料预处理，正在打开助手并自动填入输入框（就绪后按 Enter 即可发送）');
       return;
     }
     const hFmtBtn = e.target.closest('#historyFilterPills .f-pill[data-hfmt]');
@@ -981,6 +999,12 @@ function bindGlobalUIEvents() {
       case 'import-ai-any': Store.bridge && Store.bridge.importAiAnyFiles(); break;
       case 'import-ai-qfiles': Store.bridge && Store.bridge.importAiQuestionFiles(); break;
       case 'import-ai-notefiles': Store.bridge && Store.bridge.importAiNoteFiles(); break;
+      case 'preprocess-ai':
+        Store.bridge && Store.bridge.preprocessAiMaterials && Store.bridge.preprocessAiMaterials(resStr => {
+          const r = JSON.parse(resStr);
+          showToast(r.ok ? `预处理完成：${r.summary}` : (r.error || '预处理失败'));
+        });
+        break;
       case 'clear-ai-ws':
         Store.bridge && Store.bridge.clearAiWorkspace('all', () => showToast('已清空当前 AI 工坊工作区'));
         break;

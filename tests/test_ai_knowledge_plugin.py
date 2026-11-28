@@ -331,3 +331,184 @@ def test_rich_docx_html_xlsx_and_layout_modes(tmp_path: Path):
     quiz_html = by_ext[".html"].read_text(encoding="utf-8")
     assert "自测刷题模式" in quiz_html and "背题精讲模式" in quiz_html
 
+
+def test_material_preprocessing_cleans_extracts_and_budgets(monkeypatch, tmp_path: Path):
+    hdir = tmp_path / "ai_handoff"
+    hdir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(ak, "get_handoff_dir", lambda: hdir)
+
+    # 1. 文本清洗：去除重复页眉/页脚、孤立页码、修复中文断行并保持幂等
+    raw_pdf_note = (
+        "通信原理期末总复习课件 · XXX大学\n"
+        "# 第三章 采样定理与信道容量\n"
+        "奈奎斯特采样定理指出连续带限\n"
+        "信号无失真恢复的最小采样频率必须\n"
+        "大于等于最高频率的两倍。\n"
+        "第 1 页\n"
+        "通信原理期末总复习课件 · XXX大学\n"
+        "重点：避免混叠失真的条件为 $fs >= 2B$。\n"
+        "2 / 10\n"
+        "通信原理期末总复习课件 · XXX大学\n"
+        "公式：$C = B \\log_2(1 + S/N)$\n"
+        "Page 3\n"
+    )
+    cleaned, saved = ak._clean_note_text(raw_pdf_note)
+    assert saved > 30
+    assert "XXX大学" not in cleaned
+    assert "第 1 页" not in cleaned and "Page 3" not in cleaned
+    assert "连续带限信号无失真恢复的最小采样频率必须大于等于最高频率的两倍。" in cleaned
+    cleaned2, saved2 = ak._clean_note_text(cleaned)
+    assert cleaned2 == cleaned and saved2 == 0
+
+    ext = ak._extract_note_structure(cleaned)
+    assert ext["suggested_topic"] == "第三章 采样定理与信道容量"
+    assert any("fs >= 2B" in f for f in ext["formulas"])
+    assert any("C = B" in f for f in ext["formulas"])
+    assert any("避免混叠失真" in kp for kp in ext["key_points"])
+
+    # 2. 低对比度灰暗板书图片增强
+    low_contrast_path = tmp_path / "dark_board.png"
+    im = Image.new("RGB", (320, 180), color=(90, 92, 95))
+    d = ImageDraw.Draw(im)
+    d.text((30, 70), "fs >= 2B", fill=(140, 145, 142))
+    im.save(low_contrast_path, format="PNG")
+    enhanced_note = ak.import_note_file(low_contrast_path)
+    assert enhanced_note.image_data_uri.startswith("data:image/jpeg;base64,")
+
+    # 3. 260 道题 + 1 道相似重复题 + 笔记 -> 验证去重检测但不删题，且大题库自适应分流附件
+    qs = []
+    for i in range(259):
+        qs.append(
+            Question(
+                id=f"big:{i+1}",
+                question_type="单选题",
+                subject_html=f"<p>关于信号与系统第 {i+1} 个典型滤波器和傅里叶频谱性质判断（补充描述词用于长度测试）？</p>",
+                answer="A",
+                has_options=True,
+                options=[Option(True, "正确频域响应"), Option(False, "干扰项")],
+                subject_name="信号与系统",
+                chapter_name=f"第{(i % 4) + 1}章",
+                is_choice=True,
+            )
+        )
+    qs.append(
+        Question(
+            id="big:dup",
+            question_type="单选题",
+            subject_html="<p>关于信号与系统第 1 个典型滤波器和傅里叶频谱性质判断（补充描述词用于长度测试）？</p>",
+            answer="A",
+            has_options=True,
+            options=[Option(True, "正确频域响应"), Option(False, "干扰项")],
+            subject_name="信号与系统",
+            chapter_name="第1章",
+            is_choice=True,
+        )
+    )
+    text_note = ak.NoteItem(id="n_txt", title="课堂笔记", source_type="pdf", raw_text=raw_pdf_note)
+    ws = ak.KnowledgeWorkspace(title="大题库测试", questions=qs, notes=[enhanced_note, text_note])
+
+    pack = ak.build_workbench_handoff_pack(ws)
+    rep = pack["preprocess_report"]
+    assert rep["question_count"] == 260
+    assert rep["duplicate_count"] == 1
+    assert rep["unique_question_count"] == 259
+    assert rep["cleaned_chars_saved"] > 30
+    assert rep["formula_count"] >= 2
+    assert len(pack["chat_prompt_text"]) < 26000
+    att_names = [a["name"] for a in pack["attachments"]]
+    assert any(name.endswith(".jpg") for name in att_names)
+    assert "待整理题库与课堂笔记.md" in att_names
+
+
+def test_auto_prepare_chat_js_textarea_and_contenteditable():
+    import base64
+    from PySide6.QtCore import QEventLoop, QTimer
+    from PySide6.QtWebEngineCore import QWebEnginePage
+    from PySide6.QtWidgets import QApplication
+    from cctr_export.ui.studio_web import _AUTO_PREPARE_CHAT_JS
+
+    app = QApplication.instance() or QApplication([])
+    _ = app
+
+    def _run_js_on_html(html: str, prompt_text: str, attachments: list) -> dict:
+        page = QWebEnginePage()
+        loop = QEventLoop()
+        state: dict = {}
+
+        def _after_load(ok: bool):
+            assert ok
+            js = (
+                f"({_AUTO_PREPARE_CHAT_JS})("
+                f"{json.dumps(prompt_text, ensure_ascii=False)}, "
+                f"{json.dumps(attachments, ensure_ascii=False)}, true)"
+            )
+
+            def _on_res(raw):
+                state["fill"] = json.loads(raw)
+                page.runJavaScript(
+                    """(function(){
+                      const ta = document.getElementById('composer_ta');
+                      const ce = document.getElementById('composer_ce');
+                      const srch = document.getElementById('noise_search');
+                      const fi = document.getElementById('file_up');
+                      return JSON.stringify({
+                        taVal: ta ? ta.value : null,
+                        ceText: ce ? (ce.innerText || ce.textContent) : null,
+                        srchVal: srch ? srch.value : null,
+                        activeId: document.activeElement ? document.activeElement.id : '',
+                        filesCount: fi && fi.files ? fi.files.length : 0,
+                        firstFileName: fi && fi.files && fi.files[0] ? fi.files[0].name : ''
+                      });
+                    })()""",
+                    _on_verify,
+                )
+
+            def _on_verify(raw2):
+                state["dom"] = json.loads(raw2)
+                loop.quit()
+
+            page.runJavaScript(js, _on_res)
+
+        page.loadFinished.connect(_after_load)
+        QTimer.singleShot(8000, loop.quit)
+        page.setHtml(html)
+        loop.exec()
+        page.deleteLater()
+        return state
+
+    prompt = "你好，请整理共 12 题【高等数学】考点，并按先知识点精讲后紧接真题编排。"
+    buf = io.BytesIO()
+    Image.new("RGB", (60, 40), color=(240, 240, 240)).save(buf, format="JPEG")
+    att = [{"name": "board_01.jpg", "mime": "image/jpeg", "b64": base64.b64encode(buf.getvalue()).decode("ascii")}]
+
+    # Case 1: <textarea> 主输入栏 + 顶部搜索框/登录密码框干扰
+    html_ta = """<!doctype html><html><body>
+      <input id="noise_search" type="search" placeholder="搜索历史对话" style="width:260px;height:32px;">
+      <input id="noise_pwd" type="password" placeholder="密码" style="width:260px;height:32px;">
+      <div style="margin-top:260px;">
+        <textarea id="composer_ta" style="width:520px;height:80px;" placeholder="向千问提问…"></textarea>
+      </div>
+    </body></html>"""
+    res1 = _run_js_on_html(html_ta, prompt, [])
+    assert res1["fill"]["filled"] is True
+    assert res1["dom"]["taVal"] == prompt
+    assert res1["dom"]["srchVal"] == ""
+    assert res1["dom"]["activeId"] == "composer_ta"
+
+    # Case 2: [contenteditable="true"] 富文本输入栏 + <input type="file"> 自动附带板书图
+    html_ce = """<!doctype html><html><body>
+      <input id="noise_search" type="search" placeholder="搜索" style="width:240px;height:30px;">
+      <input id="file_up" type="file" accept="image/*" multiple>
+      <div style="margin-top:240px;">
+        <div id="composer_ce" contenteditable="true" role="textbox" style="width:540px;height:90px;"></div>
+      </div>
+    </body></html>"""
+    res2 = _run_js_on_html(html_ce, prompt, att)
+    assert res2["fill"]["filled"] is True
+    assert res2["fill"]["attached"] == 1
+    assert prompt[:30] in res2["dom"]["ceText"]
+    assert res2["dom"]["filesCount"] == 1
+    assert res2["dom"]["firstFileName"] == "board_01.jpg"
+    assert res2["dom"]["activeId"] == "composer_ce"
+
+

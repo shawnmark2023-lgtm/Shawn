@@ -486,6 +486,15 @@
                 尚未加载题库：可直接拖入题库文件，或点击上方「一键载入最近导出题库」。
               </div>
 
+              <div id="aiPreprocessBar" class="ai-preprocess-bar" style="display:none;">
+                <div class="ai-preprocess-main">
+                  <strong class="ai-preprocess-title">✓ 材料智能预处理已就绪</strong>
+                  <span id="aiPreprocessSummary" class="mono"></span>
+                  <div id="aiPreprocessTags" class="ai-preprocess-tags"></div>
+                </div>
+                <button type="button" class="btn btn-outline" style="height:28px;padding:0 10px;font-size:11.5px;flex-shrink:0;" data-action="preprocess-ai">重新预处理</button>
+              </div>
+
               <div id="manualNoteWrap" style="display:none;margin-top:10px;padding:10px;border:1px solid var(--line);border-radius:6px;background:var(--sheet-soft);">
                 <input class="input" id="manualNoteTitle" placeholder="笔记标题（如：第3章板书笔记）" style="height:32px;margin-bottom:6px;font-size:12px;">
                 <textarea class="ai-textarea" id="manualNoteBody" rows="3" placeholder="粘贴课堂笔记、老师划的重点或公式总结…"></textarea>
@@ -525,6 +534,10 @@
               </div>
 
               <div class="ai-mode-pane" id="aiModePaneWeb">
+                <div class="ai-autofill-hint">
+                  <strong>✨ 真正一键整理（自动预填、直接按回车）：</strong>
+                  点击下方任意助手 → 自动清洗去重与提炼材料、打开工作台并<b>自动填满提示词与板书附件</b>且聚焦输入框，<b>您只需按一下 Enter（回车）即可发送</b>！
+                </div>
                 <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:8px;">
                   <button type="button" class="btn btn-carbon" style="height:35px;font-size:12.5px;" data-workbench="qianwen">打开通义千问一键整理 →</button>
                   <button type="button" class="btn btn-outline" style="height:35px;font-size:12.5px;" data-workbench="yuanbao">腾讯元宝 / WorkBuddy 助手</button>

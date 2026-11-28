@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from xml.etree import ElementTree as ET
 from xml.sax.saxutils import escape as xml_escape
 
-from PIL import Image, ImageOps
+from PIL import Image, ImageEnhance, ImageOps
 
 from ..core.exporter import export_questions_to_pdf, pack_to_zip, prefetch_and_inline_images, render_html_to_pdf_bytes
 from ..core.formats import (
@@ -211,6 +211,7 @@ class KnowledgeWorkspace:
     questions: list[Question] = dataclasses.field(default_factory=list)
     notes: list[NoteItem] = dataclasses.field(default_factory=list)
     topics: list[KnowledgeTopic] = dataclasses.field(default_factory=list)
+    preprocess_report: dict = dataclasses.field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -220,6 +221,7 @@ class KnowledgeWorkspace:
             "questions": [dataclasses.asdict(q) for q in self.questions],
             "notes": [n.to_dict() for n in self.notes],
             "topics": [t.to_dict() for t in self.topics],
+            "preprocess_report": self.preprocess_report,
         }
 
 
@@ -258,6 +260,7 @@ def load_workspace_from_json(raw_json: str) -> KnowledgeWorkspace:
         questions=qs,
         notes=notes,
         topics=topics,
+        preprocess_report=dict(data.get("preprocess_report") or {}),
     )
 
 
@@ -322,7 +325,7 @@ def _pdf_bytes_to_text(raw: bytes) -> str:
     return "\n\n".join(pages)
 
 
-def _encode_note_image_data_uri(raw: bytes, max_edge: int = 1600) -> str:
+def _encode_note_image_data_uri(raw: bytes, max_edge: int = 1600, enhance: bool = True) -> str:
     with Image.open(io.BytesIO(raw)) as im:
         im = ImageOps.exif_transpose(im)
         if im.mode in ("RGBA", "LA", "P"):
@@ -334,6 +337,13 @@ def _encode_note_image_data_uri(raw: bytes, max_edge: int = 1600) -> str:
             im = im.convert("RGB")
         if max(im.size) > max_edge:
             im.thumbnail((max_edge, max_edge), Image.Resampling.LANCZOS)
+        if enhance:
+            # 轻度自适应对比度 + 锐化，提升手机拍板书/讲义暗光或偏灰照片清晰度
+            try:
+                im = ImageOps.autocontrast(im, cutoff=1)
+                im = ImageEnhance.Sharpness(im).enhance(1.15)
+            except Exception:
+                pass
         buf = io.BytesIO()
         im.save(buf, format="JPEG", quality=88, optimize=True)
         b64 = base64.b64encode(buf.getvalue()).decode("ascii")
@@ -818,11 +828,249 @@ def _tokenize_zh(text: str) -> set[str]:
     return tokens
 
 
+_PAGE_LINE_RE = re.compile(r"^[-—–\s]*(?:第\s*\d+\s*页|page\s*\d+|\d+\s*/\s*\d+|\d+)[-—–\s]*$", re.I)
+_CJK_LINE_END_RE = re.compile(r"[\u4e00-\u9fff，、；]$")
+_CJK_OR_STRUCT_START_RE = re.compile(r"^(?:[#>\-\*•\[【（(]|(?:\d+|[一二三四五六七八九十]+)[.、\)）])")
+_INLINE_FORMULA_RE = re.compile(r"\$\$([^$]+)\$\$|\$([^$\n]{2,100})\$|\\\[(.+?)\\\]")
+_FORMULA_OP_RE = re.compile(r"[=≈∑∫Δ→∝≤≥±×÷√^]")
+_KEYPOINT_HINT_RE = re.compile(
+    r"(?:^#{1,4}\s+|^(?:\d+|[一二三四五六七八九十]+)[.、]|^[（(](?:\d+|[一二三四五六七八九十]+)[)）]|^[-*•]\s+|"
+    r"(?:重点|考点|核心|注意|结论|定义|定理|公式|口诀|易错|必背|规律)[：:])"
+)
+_PREPROCESS_STOPWORDS = frozenset(
+    {
+        "下列", "关于", "正确", "错误", "说法", "选项", "题目", "其中", "属于", "不是", "可以",
+        "进行", "一个", "没有", "以下", "以上", "主要", "包括", "相关", "问题", "答案", "解析",
+        "什么", "哪些", "如何", "为什么", "一般", "通常", "如果", "由于", "因此", "以及", "或者",
+        "称为", "是指", "常见", "基本", "重要", "特点", "作用", "影响", "方法", "过程", "系统",
+    }
+)
+
+
+def _clean_note_text(text: str) -> tuple[str, int]:
+    """清洗 PPT/PDF/手打笔记中的页眉页脚重复行、孤立页码与中文断行粘连。"""
+    raw = str(text or "")
+    if not raw.strip():
+        return "", 0
+
+    norm = raw.replace("\r\n", "\n").replace("\r", "\n")
+    norm = re.sub(r"[\u200b-\u200f\ufeff\x00-\x08\x0b\x0c\x0e-\x1f]", "", norm)
+    raw_lines = [re.sub(r"[ \t\u3000]+", " ", ln).strip() for ln in norm.split("\n")]
+
+    # 统计短行频次，剔除幻灯片/PDF 跨页重复的页眉页脚（排除标题行与公式行）
+    freq: Counter[str] = Counter()
+    for ln in raw_lines:
+        if 2 <= len(ln) <= 60 and not ln.startswith("#") and not _FORMULA_OP_RE.search(ln):
+            freq[ln] += 1
+    repeated_noise = {ln for ln, cnt in freq.items() if cnt >= 3}
+
+    filtered: list[str] = []
+    for ln in raw_lines:
+        if not ln:
+            filtered.append("")
+            continue
+        if ln in repeated_noise or _PAGE_LINE_RE.match(ln):
+            continue
+        filtered.append(ln)
+
+    # 合并 PDF 抽取造成的中文句中断行
+    merged: list[str] = []
+    for ln in filtered:
+        if (
+            ln
+            and merged
+            and merged[-1]
+            and not merged[-1].lstrip().startswith("#")
+            and _CJK_LINE_END_RE.search(merged[-1])
+            and re.match(r"^[\u4e00-\u9fff]", ln)
+            and not _CJK_OR_STRUCT_START_RE.match(ln)
+            and not _FORMULA_OP_RE.search(merged[-1])
+            and not _FORMULA_OP_RE.search(ln)
+        ):
+            merged[-1] = merged[-1] + ln
+        else:
+            merged.append(ln)
+
+    cleaned = re.sub(r"\n{3,}", "\n\n", "\n".join(merged)).strip()
+    saved = max(0, len(raw.strip()) - len(cleaned))
+    return cleaned, saved
+
+
+def _extract_note_structure(cleaned_text: str) -> dict:
+    """从清洗后的笔记文本中离线抽取公式/结论、核心要点、建议主题与紧凑摘要。"""
+    txt = str(cleaned_text or "").strip()
+    if not txt:
+        return {"formulas": [], "key_points": [], "suggested_topic": "", "digest": ""}
+
+    formulas: list[str] = []
+    seen_f: set[str] = set()
+
+    def _add_formula(val: str):
+        v = re.sub(r"\s+", " ", val).strip(" `")
+        if 3 <= len(v) <= 120 and v not in seen_f and not re.match(r"^[-=_*#]{3,}$", v):
+            seen_f.add(v)
+            formulas.append(v)
+
+    for m in _INLINE_FORMULA_RE.finditer(txt):
+        _add_formula(m.group(1) or m.group(2) or m.group(3) or "")
+
+    key_points: list[str] = []
+    seen_k: set[str] = set()
+    suggested_topic = ""
+
+    for ln in txt.splitlines():
+        s = ln.strip()
+        if not s:
+            continue
+        if not suggested_topic:
+            m_head = re.match(r"^#{1,3}\s+(.+)$", s)
+            if m_head:
+                suggested_topic = m_head.group(1).strip()[:40]
+            else:
+                m_ch = re.match(r"^(?:第[一二三四五六七八九十\d]+[章节讲]\s*[:：]?\s*.+)$", s)
+                if m_ch:
+                    suggested_topic = s[:40]
+
+        if (
+            4 <= len(s) <= 120
+            and _FORMULA_OP_RE.search(s)
+            and re.search(r"[A-Za-z0-9]", s)
+            and not s.lower().startswith(("http://", "https://"))
+        ):
+            _add_formula(s)
+
+        if len(key_points) < 16 and 5 <= len(s) <= 180 and _KEYPOINT_HINT_RE.search(s):
+            clean_kp = re.sub(r"^#{1,4}\s+", "", s).strip()
+            if clean_kp not in seen_k:
+                seen_k.add(clean_kp)
+                key_points.append(clean_kp)
+
+    digest_parts: list[str] = []
+    if key_points:
+        digest_parts.extend(key_points[:8])
+    for ln in txt.splitlines():
+        s = ln.strip()
+        if not s or len("\n".join(digest_parts)) >= 1100:
+            continue
+        if s not in seen_k:
+            digest_parts.append(s)
+    digest = "\n".join(digest_parts)[:1200]
+    return {
+        "formulas": formulas[:12],
+        "key_points": key_points[:16],
+        "suggested_topic": suggested_topic,
+        "digest": digest,
+    }
+
+
+def preprocess_workspace_materials(workspace: KnowledgeWorkspace) -> dict:
+    """对工作区内的题库、课堂笔记和板书图片做本地清洗、去重检测、公式/要点抽取与知识画像。"""
+    prev_note_saved = dict(workspace.preprocess_report.get("_note_saved") or {})
+    note_saved_map: dict[str, int] = {}
+    all_formulas: list[str] = []
+    seen_formulas: set[str] = set()
+    total_keypoints = 0
+    image_note_count = 0
+
+    for n in workspace.notes:
+        if n.image_data_uri:
+            image_note_count += 1
+        if n.raw_text.strip():
+            cleaned, saved = _clean_note_text(n.raw_text)
+            n.raw_text = cleaned
+            note_saved_map[n.id] = max(saved, int(prev_note_saved.get(n.id, 0) or 0))
+            ext = _extract_note_structure(cleaned)
+            merged_kp = list(dict.fromkeys([*(n.key_points or []), *ext["key_points"]]))[:16]
+            merged_fm = list(dict.fromkeys([*(n.formulas or []), *ext["formulas"]]))[:12]
+            n.key_points = merged_kp
+            n.formulas = merged_fm
+            if not n.suggested_topic and ext["suggested_topic"]:
+                n.suggested_topic = ext["suggested_topic"]
+        else:
+            note_saved_map[n.id] = int(prev_note_saved.get(n.id, 0) or 0)
+
+        total_keypoints += len(n.key_points)
+        for fm in n.formulas:
+            if fm not in seen_formulas:
+                seen_formulas.add(fm)
+                all_formulas.append(fm)
+
+    items = validate_questions(workspace.questions)
+    workspace.questions = items
+
+    stem_fps: set[str] = set()
+    dup_count = 0
+    chap_counter: Counter[str] = Counter()
+    qtype_counter: Counter[str] = Counter()
+    kw_counter: Counter[str] = Counter()
+
+    for q in items:
+        plain_stem = html_to_plain_text(q.subject_html)
+        fp = re.sub(r"[\s\W_]+", "", plain_stem.lower())
+        if fp:
+            if fp in stem_fps:
+                dup_count += 1
+            else:
+                stem_fps.add(fp)
+        chap_counter[(q.chapter_name or "未分类章节").strip() or "未分类章节"] += 1
+        qtype_counter[(q.question_type or "单选题").strip() or "单选题"] += 1
+        for m in _TOKEN_RE.findall(plain_stem):
+            ml = m.lower()
+            if ml not in _PREPROCESS_STOPWORDS and not ml.isdigit() and 2 <= len(ml) <= 18:
+                kw_counter[m] += 1
+
+    for n in workspace.notes:
+        sample_txt = f"{n.title} {n.ocr_summary} {n.raw_text[:2500]}"
+        for m in _TOKEN_RE.findall(sample_txt):
+            ml = m.lower()
+            if ml not in _PREPROCESS_STOPWORDS and not ml.isdigit() and 2 <= len(ml) <= 18:
+                kw_counter[m] += 1
+
+    cleaned_saved = sum(note_saved_map.values())
+    top_keywords = [k for k, _ in kw_counter.most_common(12)]
+    chapter_summary = [{"name": k, "count": v} for k, v in chap_counter.most_common(8)]
+    qtype_summary = [{"name": k, "count": v} for k, v in qtype_counter.most_common(8)]
+
+    summary_bits: list[str] = []
+    if items:
+        dup_txt = f"（含 {dup_count} 道相似重复题）" if dup_count else "（无重复题）"
+        summary_bits.append(f"校验 {len(items)} 题{dup_txt}")
+    if workspace.notes:
+        summary_bits.append(f"{len(workspace.notes)} 份资料（{image_note_count} 张增强板书）")
+    if cleaned_saved:
+        summary_bits.append(f"清洗冗余噪声 {cleaned_saved} 字符")
+    if all_formulas or total_keypoints:
+        summary_bits.append(f"提取 {len(all_formulas)} 条公式 / {total_keypoints} 个核心要点")
+
+    report = {
+        "ready": bool(items or workspace.notes),
+        "question_count": len(items),
+        "unique_question_count": max(0, len(items) - dup_count),
+        "duplicate_count": dup_count,
+        "note_count": len(workspace.notes),
+        "image_note_count": image_note_count,
+        "cleaned_chars_saved": cleaned_saved,
+        "formula_count": len(all_formulas),
+        "keypoint_count": total_keypoints,
+        "formulas_preview": all_formulas[:8],
+        "top_keywords": top_keywords,
+        "chapter_summary": chapter_summary,
+        "qtype_summary": qtype_summary,
+        "summary_text": " · ".join(summary_bits) if summary_bits else "等待载入题库或课堂笔记",
+        "_note_saved": note_saved_map,
+    }
+    workspace.preprocess_report = report
+    return report
+
+
 def offline_classify_and_fuse(questions: list[Question], notes: list[NoteItem], title: str = "考点智能分类") -> KnowledgeWorkspace:
     """免 API 零成本本地关键词/章节语义融合分类（同时作为大模型未分配题目的兜底引擎）。"""
-    items = validate_questions(questions)
+    ws_tmp = KnowledgeWorkspace(title=title, questions=list(questions), notes=list(notes))
+    report = preprocess_workspace_materials(ws_tmp)
+    items = ws_tmp.questions
+    notes = ws_tmp.notes
     note_tokens = {
-        n.id: _tokenize_zh(f"{n.title} {n.suggested_topic} {n.ocr_summary} {n.raw_text[:2000]}")
+        n.id: _tokenize_zh(f"{n.title} {n.suggested_topic} {n.ocr_summary} {' '.join(n.key_points)} {n.raw_text[:2000]}")
         for n in notes
     }
 
@@ -855,7 +1103,8 @@ def offline_classify_and_fuse(questions: list[Question], notes: list[NoteItem], 
         summary_lines = [f"本考点共汇集 **{len(q_list)}** 道题目。"]
         formulas: list[str] = []
         for mn in matched_notes:
-            snippet = (mn.ocr_summary or mn.raw_text or "").strip()[:500]
+            kp_txt = ("\n".join(f"- {kp}" for kp in mn.key_points[:6])) if mn.key_points else ""
+            snippet = (mn.ocr_summary or kp_txt or mn.raw_text or "").strip()[:550]
             if snippet:
                 summary_lines.append(f"**课堂笔记《{mn.title}》精要：**\n{snippet}")
             formulas.extend(mn.formulas)
@@ -873,7 +1122,14 @@ def offline_classify_and_fuse(questions: list[Question], notes: list[NoteItem], 
             )
         )
 
-    return KnowledgeWorkspace(title=title, source_label="本地章节与笔记关键词融合", questions=items, notes=notes, topics=topics)
+    return KnowledgeWorkspace(
+        title=title,
+        source_label="本地章节与笔记关键词融合",
+        questions=items,
+        notes=notes,
+        topics=topics,
+        preprocess_report=report,
+    )
 
 
 def ai_classify_and_fuse(
@@ -885,7 +1141,10 @@ def ai_classify_and_fuse(
     progress_cb: Optional[Callable[[int, str], None]] = None,
 ) -> KnowledgeWorkspace:
     """使用多模态大模型先识图读笔记，再按考点大纲对全量题目智能分类与知识点融合。"""
-    items = validate_questions(questions)
+    ws_tmp = KnowledgeWorkspace(title=title, questions=list(questions), notes=list(notes))
+    report = preprocess_workspace_materials(ws_tmp)
+    items = ws_tmp.questions
+    notes = ws_tmp.notes
     client = MultimodalModelClient(profile)
 
     def _report(pct: int, msg: str):
@@ -997,41 +1256,84 @@ def ai_classify_and_fuse(
         questions=items,
         notes=processed_notes,
         topics=non_empty_topics or topics,
+        preprocess_report=report,
     )
 
 
 def build_workbench_handoff_pack(workspace: KnowledgeWorkspace, custom_prompt: str = "") -> dict:
-    """生成可直接粘贴给通义千问 / 腾讯元宝 / WorkBuddy / DeepSeek 的紧凑考点融合提示词及本地任务目录。"""
+    """对笔记与题库完成预处理（清洗/去重/公式要点抽取/图像增强）并生成一键填入助手的数据包。"""
     items = validate_questions(workspace.questions)
     if not items:
         raise ValueError("请先载入题库后再生成 AI 整理指令")
 
+    report = preprocess_workspace_materials(workspace)
+    items = workspace.questions
     handoff_dir = get_handoff_dir()
     image_paths: list[str] = []
+    attachments: list[dict[str, str]] = []
     note_lines: list[str] = []
+
     for idx, n in enumerate(workspace.notes, 1):
         img_note = ""
         if n.image_data_uri and "," in n.image_data_uri:
             fname = f"note_{idx:02d}_{safe_archive_segment(n.title)}.jpg"
             fp = handoff_dir / fname
-            fp.write_bytes(base64.b64decode(n.image_data_uri.split(",", 1)[1]))
+            b64_data = n.image_data_uri.split(",", 1)[1]
+            fp.write_bytes(base64.b64decode(b64_data))
             image_paths.append(str(fp))
-            img_note = f"（板书图片已导出至：{fname}）"
-        body = (n.ocr_summary or n.raw_text or "").strip()[:1500]
-        note_lines.append(f"### 笔记 {idx}：《{n.title}》{img_note}\n{body or '（见对应板书照片）'}")
+            img_note = f"（增强清晰版板书图片已自动附带/导出：{fname}）"
+            if len(attachments) < 6:
+                attachments.append({"name": fname, "mime": "image/jpeg", "b64": b64_data})
+
+        meta_parts: list[str] = []
+        if n.formulas:
+            meta_parts.append("提炼公式：" + "；".join(n.formulas[:6]))
+        if n.key_points:
+            meta_parts.append("核心要点：" + "；".join(n.key_points[:6]))
+        body = (n.ocr_summary or n.raw_text or "").strip()[:1400]
+        meta_block = ("\n".join(f"- {mp}" for mp in meta_parts) + "\n") if meta_parts else ""
+        note_lines.append(f"### 笔记 {idx}：《{n.title}》{img_note}\n{meta_block}{body or '（见对应板书照片）'}")
+
+    # 根据题库规模自适应分配每题字数预算，保证整份提示词可直接填入主流网页对话输入栏
+    n_qs = len(items)
+    if n_qs <= 80:
+        stem_lim, opt_lim, ans_lim, include_opts = 180, 32, 70, True
+    elif n_qs <= 200:
+        stem_lim, opt_lim, ans_lim, include_opts = 110, 0, 45, False
+    else:
+        stem_lim, opt_lim, ans_lim, include_opts = 68, 0, 30, False
 
     q_lines: list[str] = []
     for idx, q in enumerate(items, 1):
-        stem = html_to_plain_text(q.subject_html)[:160].replace("\n", " ")
-        ans = html_to_plain_text(q.answer)[:60].replace("\n", " ")
+        stem = html_to_plain_text(q.subject_html)[:stem_lim].replace("\n", " ")
+        ans = html_to_plain_text(q.answer)[:ans_lim].replace("\n", " ")
         chap = (q.chapter_name or "未分类").strip()
-        q_lines.append(f"[Q{idx}] ({q.question_type}|{chap}) {stem} [答:{ans}]")
+        opts_txt = ""
+        if include_opts and q.options:
+            opts_txt = " | 选:" + "/".join(html_to_plain_text(o.html)[:opt_lim].replace("\n", " ") for o in q.options[:4])
+        q_lines.append(f"[Q{idx}] ({q.question_type}|{chap}) {stem}{opts_txt} [答:{ans}]")
+
+    chap_brief = "、".join(f"{c['name']}({c['count']})" for c in report.get("chapter_summary", [])[:6]) or "未按章节划分"
+    qtype_brief = "、".join(f"{t['name']}({t['count']})" for t in report.get("qtype_summary", [])[:6])
+    kw_brief = "、".join(report.get("top_keywords", [])[:10]) or "待归纳"
+    fm_brief = "；".join(report.get("formulas_preview", [])[:6])
+
+    preprocess_block = (
+        "## 材料预处理画像\n"
+        f"- 题库规模：共 {n_qs} 题（唯一题干 {report['unique_question_count']} 题"
+        + (f"，含 {report['duplicate_count']} 道相似重复题，归类时可合并讲解并保留全部题号" if report["duplicate_count"] else "")
+        + "）\n"
+        f"- 章节分布：{chap_brief}\n"
+        f"- 题型构成：{qtype_brief}\n"
+        f"- 高频考点词：{kw_brief}\n"
+        + (f"- 笔记预提取公式/结论：{fm_brief}\n" if fm_brief else "")
+    )
 
     extra = f"\n用户附加整理偏好：{custom_prompt.strip()}" if (custom_prompt or "").strip() else ""
-    prompt_text = (
-        f"你是一位擅长考前复习梳理的名师。请把下面【课堂笔记】与【共 {len(items)} 道考题（编号 Q1~Q{len(items)}）】"
+    header_prompt = (
+        f"你是一位擅长考前复习梳理的名师。我已完成资料预处理，请把下面【课堂笔记】与【共 {n_qs} 道考题（编号 Q1~Q{n_qs}）】"
         f"融合整理为按【核心考点】归纳的「先知识点精讲、后紧接对应真题」复习结构。{extra}\n"
-        "请尽量输出一个 ```json ... ``` 代码块，格式如下（questions 数组里填题号如 \"Q1\"、\"Q2-Q8\"，尽量覆盖全部题目）：\n"
+        "请严格输出一个 ```json ... ``` 代码块，格式如下（questions 数组里填题号如 \"Q1\"、\"Q2-Q8\"，请覆盖全部题目）：\n"
         "```json\n"
         '{"topics": [\n'
         '  {"name": "考点名称", "importance": "核心高频|重要掌握|基础了解",\n'
@@ -1040,26 +1342,52 @@ def build_workbench_handoff_pack(workspace: KnowledgeWorkspace, custom_prompt: s
         '   "questions": ["Q1", "Q2-Q5"]}\n'
         "]}\n"
         "```\n\n"
-        "## 一、课堂笔记资料\n"
+        f"{preprocess_block}\n"
+        "## 一、课堂笔记与板书资料\n"
         + ("\n\n".join(note_lines) if note_lines else "（本次未导入额外笔记，请直接提炼各考点核心原理、易错辨析与记忆口诀）")
-        + "\n\n## 二、题库全量摘要\n"
-        + "\n".join(q_lines)
     )
+
+    full_q_section = "\n\n## 二、题库全量摘要\n" + "\n".join(q_lines)
+    prompt_text = header_prompt + full_q_section
 
     bundle_md = handoff_dir / "待整理题库与课堂笔记.md"
     bundle_md.write_text(prompt_text, encoding="utf-8")
+
+    # 若超大规模题库使直填文本超过 26,000 字符，同时附上完整 .md 附件并在输入框填入紧凑直读版本
+    chat_prompt_text = prompt_text
+    if len(prompt_text) > 26000 or n_qs > 200:
+        md_b64 = base64.b64encode(prompt_text.encode("utf-8")).decode("ascii")
+        attachments.append({"name": "待整理题库与课堂笔记.md", "mime": "text/markdown", "b64": md_b64})
+        compact_lines: list[str] = []
+        used = 0
+        for line in q_lines:
+            short_line = line[:78]
+            if used + len(short_line) + 1 > 16000:
+                compact_lines.append(f"...（其余题目见同步附带的「待整理题库与课堂笔记.md」，请覆盖 Q1~Q{n_qs} 全部题号）")
+                break
+            compact_lines.append(short_line)
+            used += len(short_line) + 1
+        chat_prompt_text = (
+            header_prompt
+            + "\n\n> 注：题库较大，完整题干文件「待整理题库与课堂笔记.md」已自动随本消息附带（如下未截断列表供速览）。\n\n## 二、题库速览索引\n"
+            + "\n".join(compact_lines)
+        )
+
     inst_txt = handoff_dir / "WorkBuddy一键指令.txt"
     inst_txt.write_text(
-        "请打开 WorkBuddy / 通义千问，直接将本目录下的「待整理题库与课堂笔记.md」（以及 note_*.jpg 板书图，如有）"
-        "拖入对话，或粘贴「待整理题库与课堂笔记.md」正文后把 AI 生成结果复制回本软件的「提取 / 粘贴回填 AI 结果」即可自动生成考点树与多格式讲义。",
+        "请打开 WorkBuddy / 通义千问，软件已自动将预处理后的「待整理题库与课堂笔记.md」与增强板书图填入对话，"
+        "您只需按 Enter 回车发送，完成后点击『② 提取 AI 回复并生成考点树』即可。",
         encoding="utf-8",
     )
     return {
         "handoff_dir": str(handoff_dir),
         "bundle_md": str(bundle_md),
         "image_paths": image_paths,
+        "attachments": attachments,
         "prompt_text": prompt_text,
-        "question_count": len(items),
+        "chat_prompt_text": chat_prompt_text,
+        "preprocess_report": report,
+        "question_count": n_qs,
         "note_count": len(workspace.notes),
     }
 

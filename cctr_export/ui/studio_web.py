@@ -74,6 +74,7 @@ from ..plugins.ai_knowledge import (
     load_workspace_from_json,
     offline_classify_and_fuse,
     parse_external_assistant_reply,
+    preprocess_workspace_materials,
     probe_local_cli_agents,
     save_ai_config,
 )
@@ -846,23 +847,133 @@ class _DroppedFilesWorker(QThread):
             self.done.emit(self._zone, {"ok": False, "error": str(e), "errors": [str(e)]})
 
 
-_FILL_CHAT_PROMPT_JS = """(function(promptText) {
+_AUTO_PREPARE_CHAT_JS = r"""(function(promptText, attachments, forceOverwrite) {
+  function isVisible(el) {
+    if (!el) return false;
+    const style = window.getComputedStyle(el);
+    if (style.display === 'none' || style.visibility === 'hidden' || style.opacity === '0') return false;
+    const r = el.getBoundingClientRect();
+    return r.width >= 180 && r.height >= 24 && (el.offsetParent !== null || style.position === 'fixed' || style.position === 'sticky');
+  }
+  function isNoiseInput(el) {
+    const tag = (el.tagName || '').toUpperCase();
+    const tp = (el.getAttribute('type') || '').toLowerCase();
+    if (tag === 'INPUT' && (tp === 'password' || tp === 'tel' || tp === 'search' || tp === 'hidden' || tp === 'checkbox' || tp === 'radio')) return true;
+    const hint = ((el.getAttribute('placeholder') || '') + ' ' + (el.getAttribute('aria-label') || '') + ' ' + (el.getAttribute('name') || '')).toLowerCase();
+    if (/搜索|手机号|验证码|密码|账号|登录|search|phone|password|captcha/.test(hint) && tag !== 'TEXTAREA' && !el.isContentEditable) return true;
+    if (/搜索|search/.test(hint) && !/问|聊|输入|prompt|chat|message|千问|元宝|kimi|deepseek|豆包/i.test(hint)) return true;
+    return false;
+  }
   const candidates = Array.from(document.querySelectorAll('textarea, [contenteditable="true"], [role="textbox"]'))
-    .filter(el => el.offsetParent !== null && !el.disabled && !el.readOnly);
-  const el = candidates.sort((a, b) => (b.getBoundingClientRect().top || 0) - (a.getBoundingClientRect().top || 0))[0];
-  if (!el) return JSON.stringify({filled: false});
+    .filter(el => isVisible(el) && !el.disabled && !el.readOnly && !isNoiseInput(el));
+  const el = candidates.sort((a, b) => {
+    const ra = a.getBoundingClientRect();
+    const rb = b.getBoundingClientRect();
+    return (rb.bottom * 2 + rb.width) - (ra.bottom * 2 + ra.width);
+  })[0];
+  if (!el) return JSON.stringify({filled: false, reason: 'no_composer'});
+
+  const currentVal = (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') ? (el.value || '') : (el.innerText || el.textContent || '');
+  const sigPrefix = String(promptText || '').trim().slice(0, 36);
+  function focusAtEnd(target) {
+    target.scrollIntoView({block: 'nearest'});
+    target.focus();
+    if (target.tagName === 'TEXTAREA' || target.tagName === 'INPUT') {
+      const len = (target.value || '').length;
+      try { target.setSelectionRange(len, len); } catch (_e) {}
+    } else {
+      try {
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        range.collapse(false);
+        const sel = window.getSelection();
+        if (sel) { sel.removeAllRanges(); sel.addRange(range); }
+      } catch (_e) {}
+    }
+  }
+
+  let attachedCount = 0;
+  function tryAttachFiles() {
+    if (!Array.isArray(attachments) || !attachments.length) return 0;
+    const sig = attachments.map(a => a.name + ':' + (a.b64 || '').length).join('|');
+    if (!forceOverwrite && window.__cctrAttachedSig === sig) return 0;
+    const fileInputs = Array.from(document.querySelectorAll('input[type="file"]'));
+    if (!fileInputs.length) return 0;
+    const hasImages = attachments.some(a => (a.mime || '').startsWith('image/'));
+    const picked = fileInputs.sort((a, b) => {
+      const sa = ((a.accept || '').includes('image') || a.multiple ? 2 : 0) + (a.disabled ? -5 : 0);
+      const sb = ((b.accept || '').includes('image') || b.multiple ? 2 : 0) + (b.disabled ? -5 : 0);
+      return sb - sa;
+    })[0];
+    if (!picked || picked.disabled) return 0;
+    try {
+      const dt = new DataTransfer();
+      let added = 0;
+      for (const att of attachments) {
+        if (!att || !att.b64 || !att.name) continue;
+        if (hasImages && picked.accept && /image\//i.test(picked.accept) && !/\*|markdown|\.md/i.test(picked.accept) && !(att.mime || '').startsWith('image/')) {
+          continue;
+        }
+        const bin = atob(att.b64);
+        const u8 = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+        dt.items.add(new File([u8], att.name, {type: att.mime || 'application/octet-stream'}));
+        added += 1;
+        if (!picked.multiple && added >= 1) break;
+      }
+      if (!dt.files.length) return 0;
+      picked.files = dt.files;
+      picked.dispatchEvent(new Event('input', {bubbles: true}));
+      picked.dispatchEvent(new Event('change', {bubbles: true}));
+      window.__cctrAttachedSig = sig;
+      return dt.files.length;
+    } catch (_e) {
+      return 0;
+    }
+  }
+
+  if (!forceOverwrite && sigPrefix && currentVal.includes(sigPrefix)) {
+    attachedCount = tryAttachFiles();
+    focusAtEnd(el);
+    return JSON.stringify({filled: true, alreadyFilled: true, attached: attachedCount, tag: el.tagName});
+  }
+
   el.focus();
   if (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT') {
-    const setter = Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value')?.set;
+    const proto = el.tagName === 'INPUT' ? window.HTMLInputElement.prototype : window.HTMLTextAreaElement.prototype;
+    const setter = Object.getOwnPropertyDescriptor(proto, 'value')?.set;
     if (setter) setter.call(el, promptText); else el.value = promptText;
-    el.dispatchEvent(new Event('input', {bubbles: true}));
+    el.dispatchEvent(new InputEvent('input', {bubbles: true, data: promptText, inputType: 'insertText'}));
     el.dispatchEvent(new Event('change', {bubbles: true}));
   } else {
-    el.innerText = promptText;
-    el.dispatchEvent(new InputEvent('input', {bubbles: true, data: promptText}));
+    try {
+      const sel = window.getSelection();
+      if (sel) {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+      document.execCommand('insertText', false, promptText);
+    } catch (_e) {}
+    if (((el.innerText || el.textContent || '').trim().length) < Math.min(20, String(promptText || '').trim().length)) {
+      try {
+        const dt = new DataTransfer();
+        dt.setData('text/plain', promptText);
+        el.dispatchEvent(new ClipboardEvent('paste', {bubbles: true, cancelable: true, clipboardData: dt}));
+      } catch (_e) {}
+    }
+    if (((el.innerText || el.textContent || '').trim().length) < Math.min(20, String(promptText || '').trim().length)) {
+      el.textContent = promptText;
+      el.dispatchEvent(new InputEvent('input', {bubbles: true, data: promptText, inputType: 'insertText'}));
+    }
   }
-  return JSON.stringify({filled: true});
+  el.dataset.cctrFilled = '1';
+  attachedCount = tryAttachFiles();
+  focusAtEnd(el);
+  return JSON.stringify({filled: true, alreadyFilled: false, attached: attachedCount, tag: el.tagName});
 })"""
+
 
 _EXTRACT_ASSISTANT_REPLY_JS = """(function() {
   const pres = Array.from(document.querySelectorAll('pre, code'))
@@ -885,7 +996,7 @@ _EXTRACT_ASSISTANT_REPLY_JS = """(function() {
 
 
 class AiWebAssistantDialog(QDialog):
-    """免 API 内置大模型助手工作台（支持通义千问 / 腾讯元宝·WorkBuddy / DeepSeek / Kimi / 豆包）。"""
+    """免 API 内置大模型助手工作台（自动预处理资料、自动填入对话，只需按 Enter 回车发送）。"""
 
     replyCaptured = Signal(str, str)  # raw_reply, assistant_label
     _CHROME_UA = (
@@ -895,10 +1006,12 @@ class AiWebAssistantDialog(QDialog):
 
     def __init__(self, parent=None, *, initial_key: str = "qianwen", handoff_info: dict | None = None):
         super().__init__(parent)
-        self.setWindowTitle("CCTR Atelier · 免 API 千问 / WorkBuddy / AI 助手工作台")
+        self.setWindowTitle("CCTR Atelier · 一键自动填入 AI 工作台（就绪后直接按 Enter 回车发送）")
         self.resize(1240, 820)
         self._handoff = handoff_info or {}
         self._direct_mode = True
+        self._auto_filled = False
+        self._autofill_attempts = 0
         self._current_label = WEB_ASSISTANT_PRESETS.get(initial_key, WEB_ASSISTANT_PRESETS["qianwen"])[0]
         self._apply_proxy_mode(True)
 
@@ -925,12 +1038,12 @@ class AiWebAssistantDialog(QDialog):
             row1.addWidget(btn)
         row1.addStretch(1)
 
-        self._fill_btn = QPushButton("① 填入/复制题目指令", self)
+        self._fill_btn = QPushButton("① 重新自动填入", self)
         self._fill_btn.setStyleSheet(
             "QPushButton{padding:6px 12px;border:1px solid #cbc7bd;border-radius:5px;background:#fff;color:#141413;font-weight:600;font-size:12px;}"
             "QPushButton:hover{background:#eae7e0;}"
         )
-        self._fill_btn.clicked.connect(self._fill_and_copy_prompt)
+        self._fill_btn.clicked.connect(lambda: self._fill_and_copy_prompt(force=True))
         row1.addWidget(self._fill_btn)
 
         self._dir_btn = QPushButton("📂 WorkBuddy 任务包", self)
@@ -961,8 +1074,8 @@ class AiWebAssistantDialog(QDialog):
         self._proxy_btn.setStyleSheet("QPushButton{padding:4px 10px;border:1px solid #b5cfc4;border-radius:5px;background:#eef6f2;color:#1e6b4e;font-size:12px;font-weight:600;}")
         self._proxy_btn.clicked.connect(self._toggle_proxy_mode)
         row2.addWidget(self._proxy_btn)
-        self._status_lbl = QLabel("已将整理指令复制到剪贴板：登录后可直接粘贴（或点『① 填入指令』），回复完成后点『② 提取 AI 回复』", self)
-        self._status_lbl.setStyleSheet("color:#1e6b4e;font-size:12px;font-weight:600;padding:0 4px;")
+        self._status_lbl = QLabel("⏳ 正在加载对话页面，输入框就绪后将自动填入全部预处理资料，您只需按 Enter（回车）发送…", self)
+        self._status_lbl.setStyleSheet("color:#57544e;font-size:12px;font-weight:600;padding:3px 8px;background:#eae7e0;border-radius:4px;")
         row2.addWidget(self._status_lbl)
         top_box.addLayout(row2)
         root.addWidget(top_wrap)
@@ -984,13 +1097,49 @@ class AiWebAssistantDialog(QDialog):
         s.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
         root.addWidget(self._web, 1)
 
+        self._autofill_timer = QTimer(self)
+        self._autofill_timer.setInterval(700)
+        self._autofill_timer.timeout.connect(lambda: self._try_auto_fill(force=False))
+
         self._reload_btn.clicked.connect(lambda: self._web.triggerPageAction(QWebEnginePage.WebAction.ReloadAndBypassCache))
         self._url_edit.returnPressed.connect(lambda: self._web.load(QUrl.fromUserInput(self._url_edit.text().strip())))
-        self._web.urlChanged.connect(lambda u: self._url_edit.setText(u.toString()))
+        self._web.urlChanged.connect(self._on_url_changed)
+        self._web.loadFinished.connect(self._on_load_finished)
 
         _, start_url = WEB_ASSISTANT_PRESETS.get(initial_key, WEB_ASSISTANT_PRESETS["qianwen"])
         self._url_edit.setText(start_url)
         self._web.load(QUrl(start_url))
+
+    def _on_url_changed(self, url: QUrl) -> None:
+        self._url_edit.setText(url.toString())
+        if not self._auto_filled:
+            self._start_autofill_watcher()
+
+    def _on_load_finished(self, ok: bool) -> None:
+        if ok and not self._auto_filled:
+            self._start_autofill_watcher()
+            QTimer.singleShot(350, lambda: self._try_auto_fill(force=False))
+
+    def _start_autofill_watcher(self) -> None:
+        if getattr(self, "_cleaned", False):
+            return
+        self._autofill_attempts = 0
+        if not self._autofill_timer.isActive():
+            self._autofill_timer.start()
+
+    def _try_auto_fill(self, force: bool = False) -> None:
+        if getattr(self, "_cleaned", False):
+            self._autofill_timer.stop()
+            return
+        if self._auto_filled and not force:
+            self._autofill_timer.stop()
+            return
+        self._autofill_attempts += 1
+        if not force and self._autofill_attempts > 90:
+            self._autofill_timer.stop()
+            self._status_lbl.setText("⏳ 未检测到已登录对话栏：请先扫码/登录后点『① 重新自动填入』（指令已在剪贴板）")
+            return
+        self._fill_and_copy_prompt(force=force, quiet_missing=not force)
 
     def _apply_proxy_mode(self, direct: bool) -> None:
         self._direct_mode = direct
@@ -1004,30 +1153,58 @@ class AiWebAssistantDialog(QDialog):
     def _toggle_proxy_mode(self) -> None:
         self._apply_proxy_mode(not self._direct_mode)
         self._proxy_btn.setText("直连模式 ✓" if self._direct_mode else "系统代理")
+        self._auto_filled = False
         self._web.reload()
 
     def _switch_site(self, url: str, label: str) -> None:
         self._current_label = label
+        self._auto_filled = False
+        self._status_lbl.setStyleSheet("color:#57544e;font-size:12px;font-weight:600;padding:3px 8px;background:#eae7e0;border-radius:4px;")
+        self._status_lbl.setText(f"⏳ 正在打开「{label}」，输入框就绪后将自动填入资料，届时按 Enter（回车）即可发送…")
         self._url_edit.setText(url)
+        self._start_autofill_watcher()
         self._web.load(QUrl(url))
 
-    def _fill_and_copy_prompt(self) -> None:
-        prompt = str(self._handoff.get("prompt_text") or "")
+    def _fill_and_copy_prompt(self, force: bool = True, quiet_missing: bool = False) -> None:
+        prompt = str(self._handoff.get("chat_prompt_text") or self._handoff.get("prompt_text") or "")
         if not prompt:
             return
-        QApplication.clipboard().setText(prompt)
-        js = f"({_FILL_CHAT_PROMPT_JS})({json.dumps(prompt, ensure_ascii=False)})"
-        self._page.runJavaScript(js, self._on_fill_result)
+        attachments = self._handoff.get("attachments") or []
+        if force:
+            QApplication.clipboard().setText(str(self._handoff.get("prompt_text") or prompt))
+        js = (
+            f"({_AUTO_PREPARE_CHAT_JS})("
+            f"{json.dumps(prompt, ensure_ascii=False)}, "
+            f"{json.dumps(attachments, ensure_ascii=False)}, "
+            f"{'true' if force else 'false'})"
+        )
+        self._page.runJavaScript(js, lambda raw, qm=quiet_missing: self._on_fill_result(raw, quiet_missing=qm))
 
-    def _on_fill_result(self, raw) -> None:
+    def _on_fill_result(self, raw, *, quiet_missing: bool = False) -> None:
+        if getattr(self, "_cleaned", False):
+            return
         try:
             res = json.loads(raw) if isinstance(raw, str) else {}
         except Exception:
             res = {}
         if res.get("filled"):
-            self._status_lbl.setText("✓ 已自动填入网页输入框（并同步复制到剪贴板），请点击发送给 AI！")
-        else:
-            self._status_lbl.setText("✓ 完整整理指令已在剪贴板：请在下方对话框按 Ctrl+V 粘贴并发送！")
+            self._auto_filled = True
+            self._autofill_timer.stop()
+            QApplication.clipboard().setText(str(self._handoff.get("prompt_text") or self._handoff.get("chat_prompt_text") or ""))
+            self.activateWindow()
+            self._web.setFocus()
+            q_cnt = int(self._handoff.get("question_count") or 0)
+            n_cnt = int(self._handoff.get("note_count") or 0)
+            att_cnt = int(res.get("attached") or 0)
+            att_note = f" · 已自动附带 {att_cnt} 个附件" if att_cnt else ""
+            self._status_lbl.setStyleSheet(
+                "color:#14533c;font-size:12px;font-weight:700;padding:3px 8px;background:#e8f5ee;border:1px solid #b5cfc4;border-radius:4px;"
+            )
+            self._status_lbl.setText(
+                f"✓ 已自动填入全部预处理资料（{q_cnt} 题 · {n_cnt} 份笔记{att_note}），直接按 Enter（回车）即可发送！"
+            )
+        elif not quiet_missing:
+            self._status_lbl.setText("✓ 完整整理指令已在剪贴板：请在下方对话框按 Ctrl+V 粘贴后按 Enter 发送！")
 
     def _open_handoff_folder(self) -> None:
         hdir = Path(str(self._handoff.get("handoff_dir") or get_handoff_dir()))
@@ -1054,6 +1231,7 @@ class AiWebAssistantDialog(QDialog):
         if getattr(self, "_cleaned", False):
             return
         self._cleaned = True
+        self._autofill_timer.stop()
         self._web.stop()
         self._web.setPage(None)
         self._page.deleteLater()
@@ -1687,6 +1865,8 @@ class DesktopBridge(QObject):
             }
             for n in ws.notes
         ]
+        raw_rep = dict(ws.preprocess_report or {})
+        clean_rep = {k: v for k, v in raw_rep.items() if not str(k).startswith("_")}
         return {
             "title": ws.title,
             "source_label": ws.source_label,
@@ -1694,10 +1874,26 @@ class DesktopBridge(QObject):
             "questions": q_briefs,
             "notes": notes_brief,
             "topics": [t.to_dict() for t in ws.topics],
+            "preprocess_report": clean_rep,
         }
 
     def _emit_ai_ws(self):
+        if self._ai_ws.questions or self._ai_ws.notes:
+            preprocess_workspace_materials(self._ai_ws)
+        else:
+            self._ai_ws.preprocess_report = {}
         self.aiStateUpdated.emit(json.dumps(self._ai_ws_payload(), ensure_ascii=False))
+
+    @Slot(result=str)
+    def preprocessAiMaterials(self) -> str:
+        try:
+            if not self._ai_ws.questions and not self._ai_ws.notes:
+                return json.dumps({"ok": False, "error": "请先导入或载入题库/课堂笔记"}, ensure_ascii=False)
+            report = preprocess_workspace_materials(self._ai_ws)
+            self._emit_ai_ws()
+            return json.dumps({"ok": True, "summary": report.get("summary_text", ""), "report": {k: v for k, v in report.items() if not str(k).startswith("_")}}, ensure_ascii=False)
+        except Exception as e:
+            return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
 
     @Slot(str, result=str)
     def saveAiPluginConfig(self, cfg_json: str) -> str:
@@ -2035,13 +2231,14 @@ class DesktopBridge(QObject):
         try:
             custom_p = load_ai_config().custom_prompt
             pack = build_workbench_handoff_pack(self._ai_ws, custom_prompt=custom_p)
+            self._emit_ai_ws()
             QApplication.clipboard().setText(pack["prompt_text"])
             wb_gui = next((a["path"] for a in probe_local_cli_agents() if a.get("kind") == "gui"), "")
             if os.name == "nt":
                 os.startfile(pack["handoff_dir"])
                 if wb_gui and Path(wb_gui).is_file():
                     subprocess.Popen([wb_gui])
-            return json.dumps({"ok": True, "launchedGui": bool(wb_gui), **pack}, ensure_ascii=False)
+            return json.dumps({"ok": True, "launchedGui": bool(wb_gui), **{k: v for k, v in pack.items() if k != "attachments"}}, ensure_ascii=False)
         except Exception as e:
             return json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False)
 
@@ -2050,6 +2247,7 @@ class DesktopBridge(QObject):
         try:
             custom_p = load_ai_config().custom_prompt
             pack = build_workbench_handoff_pack(self._ai_ws, custom_prompt=custom_p)
+            self._emit_ai_ws()
             QApplication.clipboard().setText(pack["prompt_text"])
         except Exception as e:
             self.aiFusionDone.emit(json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False))
